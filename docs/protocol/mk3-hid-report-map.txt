@@ -1,0 +1,115 @@
+descriptor: 1001 bytes, 476 HID items
+
+========================================================================
+INPUT REPORTS (5)
+========================================================================
+
+  report 0x01: 48 bits = 6 bytes payload  (+1 id = 7)
+      usage 0x02       page 0xFF01    40 x   1 bits =    40  range 0..1      [Data,Var,Abs]
+      usage 0x03       page 0xFF01     2 x   4 bits =     8  range 0..15     [Data,Var,Abs]
+
+  report 0x02: 216 bits = 27 bytes payload  (+1 id = 28)
+      usage 0x02       page 0xFF01     8 x   1 bits =     8  range 0..1      [Data,Var,Abs]
+      usage 0x06       page 0xFF01     8 x  16 bits =   128  range 0..999    [Data,Var,Abs]
+      usage 0x09       page 0xFF01     4 x  16 bits =    64  range 0..4095   [Data,Var,Abs]
+      usage 0x02       page 0xFF01    16 x   1 bits =    16  range 0..1      [Data,Var,Abs]
+
+  report 0x03: 96 bits = 12 bytes payload  (+1 id = 13)
+      usage 0x02       page 0xFF01     8 x   1 bits =     8  range 0..1      [Data,Var,Abs]
+      usage 0x44       page 0xFF01     3 x  16 bits =    48  range 0..65535  [Data,Var,Abs]
+      usage 0x08       page 0xFF01     2 x  16 bits =    32  range 0..2047   [Data,Var,Abs]
+      usage 0x0C       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+
+  report 0x40: 104 bits = 13 bytes payload  (+1 id = 14)
+      usage 0x41       page 0xFF01    13 x   8 bits =   104  range 0..255    [Data,Var,Abs]
+
+  report 0xAA: 496 bits = 62 bytes payload  (+1 id = 63)
+      usage 0xA2       page 0xFF01    31 x  16 bits =   496  range 0..65535  [Data,Var,Abs]
+========================================================================
+OUTPUT REPORTS (11)
+========================================================================
+
+  report 0x80: 336 bits = 42 bytes payload  (+1 id = 43)
+      usage 0x81       page 0xFF01    42 x   8 bits =   336  range 0..127    [Data,Var,Abs]
+
+  report 0x81: 240 bits = 30 bytes payload  (+1 id = 31)
+      usage 0x81       page 0xFF01    30 x   8 bits =   240  range 0..127    [Data,Var,Abs]
+
+  report 0x82: 704 bits = 88 bytes payload  (+1 id = 89)
+      usage 0x81       page 0xFF01    88 x   8 bits =   704  range 0..127    [Data,Var,Abs]
+
+  report 0xA0: 112 bits = 14 bytes payload  (+1 id = 15)
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+
+  report 0xA1: 1624 bits = 203 bytes payload  (+1 id = 204)
+      usage 0xA2       page 0xFF01    96 x   8 bits =   768  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    96 x   8 bits =   768  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     8 x   8 bits =    64  range 0..31     [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x  16 bits =    16  range 0..65535  [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+
+  report 0xA2: 352 bits = 44 bytes payload  (+1 id = 45)
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    20 x   8 bits =   160  range 0..255    [Data,Var,Abs]
+
+  report 0xA3: 1152 bits = 144 bytes payload  (+1 id = 145)
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01    12 x   8 bits =    96  range 0..255    [Data,Var,Abs]
+
+  report 0xA4: 1024 bits = 128 bytes payload  (+1 id = 129)
+      usage 0xA2       page 0xFF01   128 x   8 bits =  1024  range 0..255    [Data,Var,Abs]
+
+  report 0xAF: 16 bits = 2 bytes payload  (+1 id = 3)
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xA2       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+
+  report 0xF3: 8 bits = 1 bytes payload  (+1 id = 2)
+      usage 0x81       page 0xFF01     1 x   8 bits =     8  range 0..127    [Data,Var,Abs]
+
+  report 0xF4: 256 bits = 32 bytes payload  (+1 id = 33)
+      usage 0xF4       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xF5       page 0xFF01    31 x   8 bits =   248  range 0..255    [Data,Var,Abs]
+========================================================================
+FEATURE REPORTS (3)
+========================================================================
+
+  report 0xD0: 256 bits = 32 bytes payload  (+1 id = 33)
+      usage 0xD1       page 0xFF01     2 x  16 bits =    32  range 0..65535  [Data,Var,Abs]
+      usage 0xD1       page 0xFF01     1 x   8 bits =     8  range 0..255    [Data,Var,Abs]
+      usage 0xE7       page 0xFF01     1 x   8 bits =     8  range 0..100    [Data,Var,Abs]
+      usage 0x81       page 0xFF01     1 x   8 bits =     8  range 0..127    [Data,Var,Abs]
+      usage 0xD1       page 0xFF01    25 x   8 bits =   200  range 0..255    [Data,Var,Abs]
+
+  report 0xD8: 256 bits = 32 bytes payload  (+1 id = 33)
+      usage 0xD1       page 0xFF01     2 x  16 bits =    32  range 0..65535  [Const,Var,Abs]
+      usage 0xD1       page 0xFF01     2 x  16 bits =    32  range 0..65535  [Const,Var,Abs]
+      usage 0xD1       page 0xFF01     4 x  16 bits =    64  range 0..65535  [Const,Var,Abs]
+      usage 0xD1       page 0xFF01     1 x   8 bits =     8  range 0..255    [Const,Var,Abs]
+      usage 0xD1       page 0xFF01    15 x   8 bits =   120  range 0..255    [Const,Var,Abs]
+
+  report 0xD9: 256 bits = 32 bytes payload  (+1 id = 33)
+      usage 0xD1       page 0xFF01    32 x   8 bits =   256  range 0..255    [Const,Var,Abs]

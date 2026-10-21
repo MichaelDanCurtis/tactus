@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tactus-core", "crates/tactus-display"]
+members = ["crates/tactus-core", "crates/tactus-display", "crates/tactus-hid"]
 resolver = "3"
 
 [workspace.package]

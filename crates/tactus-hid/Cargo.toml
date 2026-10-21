@@ -1,0 +1,10 @@
+[package]
+name = "tactus-hid"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HID input decoding and LED output encoding for Kontrol S-series MK3 hardware"
+
+[dependencies]
+thiserror.workspace = true
