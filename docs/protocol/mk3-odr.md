@@ -211,6 +211,39 @@ infrastructure tags `request_id_tag`, `parse_tag`, `forward_traversal_tag`,
 `client_odr_client_name_tag`. **None of these are ODR events.** Recorded so the
 exclusion is a decision rather than an oversight.
 
+## The vendor left development flags in the shipped binary
+
+**Evidence class: vendor binary.** Read out of `NIHardwareConnectionService`'s
+string table as `getenv` keys. **None of these have been exercised yet** — an
+attempt to launch the agent with them set was blocked by this environment's
+command policy, so treat the descriptions as what the names claim, not as
+observed behaviour.
+
+| Variable | What the name claims | Why it matters here |
+|---|---|---|
+| `NI_ODR_AGENT_ENABLE_TCP` | Serve ODR over TCP as well as the Unix socket | A client could be developed against a local TCP endpoint, with no shared-filesystem socket and no keyboard |
+| `NI_ODR_DISABLE_SYMBOL_REGISTRY` | Stop interning method names | **The single most valuable flag.** If the wire carries plain strings instead of registry indices, the "unknown index assignment" problem disappears entirely |
+| `NI_ODR_DISABLE_HEARTBEAT_VALIDATION` | Stop requiring `instance_heartbeat` | Removes a timing requirement from a first client |
+| `NI_ODR_DISABLE_SELF_HEALING_PARSER` | Disable `self_healing_stream_parser` | Framing errors would fail loudly instead of being silently resynchronised — better for learning the framing |
+| `NI_ODR_IGNORE_API_MISMATCH` | Skip the protocol-version gate | A client reporting the wrong `host_protocol_version` would still be served |
+| `NI_ODR_FORCE_API_MISMATCH` | Force the gate to fail | Useful only for testing the mismatch path |
+
+Together the first two change the difficulty of this project materially: a
+TCP endpoint speaking msgpack with **human-readable method names** is ordinary
+protocol work, where a USB vendor interface carrying index-interned msgpack is
+not.
+
+## Observed: the agent accepts unauthenticated clients
+
+**Evidence class: hardware/host observation.** Connecting a plain
+`AF_UNIX`/`SOCK_STREAM` socket to
+`/Users/Shared/Native Instruments/com.native-instruments.odr_agent.kks`
+**succeeds**. The agent performs no handshake of its own and sends nothing for
+at least 6 seconds: it waits for the client to speak first.
+
+So there is no authentication barrier to becoming an ODR client. What is
+missing is only the message format.
+
 ## The route into host mode
 
 Assembled from the symbols above; **not yet executed**, so read it as the
