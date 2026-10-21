@@ -51,11 +51,11 @@ E. Akai MPC       — reuses A's architecture, later
 
 | Sub | Scope | Gating unknowns |
 |---|---|---|
-| A1 | Device layer: identity + port resolution **done**; platform I/O not started | none |
-| A2 | Input: HID report decoding **done** (structure); semantic naming open | which index is which physical control |
-| A3 | Light guide: encoder **done** | meaning of the 0..=127 palette values |
+| A1 | Device layer: identity, port resolution, platform HID + MIDI I/O — **done, hardware-verified** | none |
+| A2 | Input: HID report decoding **done** (structure); live polling **done**; semantic naming open | which index is which physical control |
+| A3 | Light guide: encoder **done**; writes **confirmed accepted by the device** | meaning of the 0..=127 palette values |
 | A4 | Display: pixel arm (MK2/Maschine) **done**; page arm (MK3) partial | ODR payload schemas, method-index registry |
-| A5 | C ABI + generated header | none |
+| A5 | C ABI + generated header — **done**, 40 functions, exercised by two C programs | none |
 | A6 | Protocol documentation (a D1 deliverable, not a byproduct) — **4 documents written** | tracks A1–A4 |
 
 ### Current crates
@@ -64,13 +64,36 @@ E. Akai MPC       — reuses A's architecture, later
 |---|---|---|
 | `tactus-core` | Geometry, surfaces, ARGB channels | 10 |
 | `tactus-display` | Pixel arm (MK2/Maschine) + page arm (MK3) | 35 |
-| `tactus-hid` | HID input decoding, light guide, model identity | 16 |
+| `tactus-hid` | HID input decoding, light guide, model identity, descriptor-declared sizes | 18 |
 | `tactus-midi` | DAW SysEx protocol, CC map, port resolution | 28 |
+| `tactus-io` | Platform HID and MIDI: enumerate, open, poll, write light guide | 25 + 2 hardware |
+| `tactus-ffi` | Stable C ABI and generated `tactus.h` | 27 |
 
-89 tests, clippy clean under `-D warnings`, rustdoc clean.
+143 tests, clippy clean under `-D warnings`, fmt and rustdoc clean. Both
+hardware-gated tests pass against an attached S88, and both C examples compile
+under `-Wall -Wextra` and run green.
 
-**Not yet started:** platform I/O (opening real HID and MIDI endpoints), the
-C ABI (A5), and semantic control naming.
+**The one open item in A1–A3 is semantic control naming.** The device's
+descriptor declares how many controls of what width but not which physical
+control each index is — it uses a single opaque vendor usage page. Nothing in
+the SDK claims "index 3 is Play", because a guess there would be worse than
+silence. Resolving it needs a capture session with somebody pressing each
+control in turn; it is about twenty minutes of work and cannot be done from
+the binaries.
+
+Two policies in this layer are worth stating at program level, because they
+constrain anything built on top:
+
+- **The SDK never seizes the device.** macOS HID opens are exclusive by
+  default — `hidapi`'s `hid_init()` calls `hid_darwin_set_open_exclusive(1)` —
+  so a naive open takes the keyboard away from a running vendor session. Every
+  context created here disables that, and both the Rust test and the C example
+  assert it against live hardware rather than trusting the comment.
+- **No feature-report writes, and no display or page data.** `0xD8`/`0xD9` are
+  read-only, `0xD0` is settable with none of its 32 bytes understood, and
+  nothing about a host-side MK3 framebuffer is verified. The ABI's
+  `tactus_device_write_feature` exists only to refuse, with the reason, so a
+  caller who looks for it finds an explanation rather than silence.
 
 ### B. `nks` — split further, because these fail independently
 
@@ -192,8 +215,8 @@ Deliberate design constraints, because this is going public.
 
 | Milestone | Contents | Useful on its own? |
 |---|---|---|
-| M1 | A1 + A2 + A5 + A6 — device enumeration, full input, C ABI, docs | Yes: anyone can write a host against it |
-| M2 | A3 — light guide | Yes: learning/visualisation apps become possible |
+| M1 | A1 + A2 + A5 + A6 — device enumeration, full input, C ABI, docs | Yes: anyone can write a host against it — **reached, bar semantic naming** |
+| M2 | A3 — light guide | Yes: learning/visualisation apps become possible — **reached** |
 | M3 | A4 — display, shape per §5 | Yes: completes the surface |
 | M4 | C on top of A — the lightweight host, no NKS | **Yes: already better than the incumbent for many users** |
 | M5 | B1 + B2 — NKS preset format and browser | Yes: browsing without hosting |
@@ -215,7 +238,14 @@ before M1 ships.
 
 ## 9. Immediate next steps
 
-1. Resolve §5. Everything about A4 depends on it.
-2. Confirm this decomposition, then write a full spec for **M1** only — not the program.
-3. Scaffold `tactus-core` with the C ABI boundary present from the first commit, so it
-   constrains the API rather than being bolted on.
+The first three are done: §5 is resolved, the decomposition held, and the C ABI
+has been present since the crate was scaffolded — which did its job, since
+writing a real C program against it is what found every boundary bug so far.
+
+1. **Semantic control naming** (A2's last gap). Needs a capture session at the
+   keyboard, not more static analysis.
+2. **Decide the name** before anything is published. `tactus` is a placeholder;
+   renaming is a directory move plus package names now, and an ecosystem
+   problem later.
+3. **Start C (`tactus-host`)** toward M4. That is the milestone where this
+   beats the incumbent for day-to-day use, and it needs no NKS to get there.
