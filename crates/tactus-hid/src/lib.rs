@@ -120,6 +120,33 @@ pub mod report_id {
     pub const FEAT_SERIAL: u8 = 0xD9;
 }
 
+/// Feature report ids this firmware actually implements.
+///
+/// Three, not four: the vendor's shipped report-map table also claims `0xF8`,
+/// which this firmware does not have. A platform layer should reject anything
+/// outside this set before it reaches the device.
+pub const DECLARED_FEATURE_REPORTS: [u8; 3] = [
+    report_id::FEAT_CONFIG,
+    report_id::FEAT_IDENTITY,
+    report_id::FEAT_SERIAL,
+];
+
+/// Payload bytes in each feature report this firmware declares.
+///
+/// From the live report descriptor: `0xD0`, `0xD8` and `0xD9` are each 32
+/// bytes. Cross-checked against the device's own `MaxFeatureReportSize` of 33
+/// (32 payload + 1 report id) as reported by IOKit.
+pub const FEATURE_PAYLOAD_LEN: usize = 32;
+
+/// Buffer length for a feature-report exchange: report id plus payload.
+pub const FEATURE_BUFFER_LEN: usize = FEATURE_PAYLOAD_LEN + 1;
+
+/// Largest input report, including its report id.
+///
+/// Report `0xAA` is 62 payload bytes + 1 id; the device's own
+/// `MaxInputReportSize` is 63, which is how the descriptor parse was validated.
+pub const MAX_INPUT_REPORT_LEN: usize = 63;
+
 /// Errors from decoding or encoding HID reports.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum HidError {
@@ -408,6 +435,25 @@ pub fn encode_light_guide(out: &mut [u8], model: Model, values: &[u8]) -> Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn report_buffer_sizes_match_the_devices_reported_maxima() {
+        // IOKit reports MaxFeatureReportSize 33 and MaxInputReportSize 63 for
+        // this firmware. Those two numbers are how the descriptor parse was
+        // validated, so a change here means either the parse or the firmware
+        // moved -- both worth failing a build over.
+        assert_eq!(super::FEATURE_BUFFER_LEN, 33);
+        assert_eq!(super::FEATURE_PAYLOAD_LEN, 32);
+        assert_eq!(super::MAX_INPUT_REPORT_LEN, 63);
+    }
+
+    #[test]
+    fn exactly_three_feature_reports_are_declared() {
+        // The vendor's shipped table claims a fourth, 0xF8, which the live
+        // descriptor does not declare at all.
+        assert_eq!(super::DECLARED_FEATURE_REPORTS.len(), 3);
+        assert!(!super::DECLARED_FEATURE_REPORTS.contains(&0xF8));
+    }
+
     use super::*;
 
     #[test]
