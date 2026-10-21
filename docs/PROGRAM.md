@@ -52,7 +52,7 @@ E. Akai MPC       — reuses A's architecture, later
 | Sub | Scope | Gating unknowns |
 |---|---|---|
 | A1 | Device layer: identity, port resolution, platform HID + MIDI I/O — **done, hardware-verified** | none |
-| A2 | Input: HID report decoding **done** (structure); live polling **done**; semantic naming open | which index is which physical control |
+| A2 | Input: HID report decoding **done** (structure); live polling **done** but this generation sends no input reports; semantic naming blocked | which transport carries the control surface — see below |
 | A3 | Light guide: encoder **done**; writes **confirmed accepted by the device** | meaning of the 0..=127 palette values |
 | A4 | Display: pixel arm (MK2/Maschine) **done**; page arm (MK3) partial | ODR payload schemas, method-index registry |
 | A5 | C ABI + generated header — **done**, 40 functions, exercised by two C programs | none |
@@ -73,13 +73,37 @@ E. Akai MPC       — reuses A's architecture, later
 hardware-gated tests pass against an attached S88, and both C examples compile
 under `-Wall -Wextra` and run green.
 
-**The one open item in A1–A3 is semantic control naming.** The device's
-descriptor declares how many controls of what width but not which physical
-control each index is — it uses a single opaque vendor usage page. Nothing in
-the SDK claims "index 3 is Play", because a guess there would be worse than
-silence. Resolving it needs a capture session with somebody pressing each
-control in turn; it is about twenty minutes of work and cannot be done from
-the binaries.
+**The one open item in A1–A3 is semantic control naming, and it is bigger than
+it looked.** This was previously written up as "about twenty minutes" with
+somebody pressing each control in turn. That estimate assumed the control
+surface reports over HID. **It does not.**
+
+Established by hardware observation, with the vendor's four background agents
+running and then with all of them stopped: an S88 MK3 emits **no HID input
+reports at all**, and **no MIDI control change on any of its three ports**,
+while its buttons and knobs are operated. NI's own
+`NIHardwareConnectionService` imports zero `IOHID*` symbols and drives the
+keyboard over raw USB. The device exposes a vendor interface it names **ODR**
+(interface 3, class `0xFF`, subclass `0x0D`, three endpoints) and the vendor's
+symbols carry a matching `ni::odr::transport::usb::usb_device`. Full write-up
+and negative-search bounds in
+[protocol/mk3-usb-interfaces.md](protocol/mk3-usb-interfaces.md).
+
+There are therefore two candidate routes to named controls, and they differ by
+an order of magnitude in cost:
+
+| Route | What it needs | Cost |
+|---|---|---|
+| **DAW-port handshake** | Send `BF 01 04` — three bytes of ordinary MIDI from NI's own script — and see whether the channel-16 CC map activates | one experiment |
+| **ODR transport** | Claim USB interface 3, implement the stream framing, msgpack, and the symbol registry, then discover the input schema | a milestone of its own |
+
+The handshake is the obvious first move: the CC map it would unlock arrives
+**already named** from vendor source, so it answers semantic naming directly
+rather than giving us indices to label. It is also the one piece of this
+program that has been deliberately deferred under a self-imposed rule against
+transmitting unverified bytes — a rule worth keeping in general and worth
+revisiting here, since the message is a control change from the vendor's own
+published script and no other software is holding the instrument.
 
 Two policies in this layer are worth stating at program level, because they
 constrain anything built on top:
@@ -242,8 +266,9 @@ The first three are done: §5 is resolved, the decomposition held, and the C ABI
 has been present since the crate was scaffolded — which did its job, since
 writing a real C program against it is what found every boundary bug so far.
 
-1. **Semantic control naming** (A2's last gap). Needs a capture session at the
-   keyboard, not more static analysis.
+1. **Try the DAW-port handshake** (`BF 01 04`). It is the cheapest path to
+   semantic control naming by a wide margin, and the capture tooling to observe
+   the result already exists (`cargo run -p tactus-io --example midiwatch`).
 2. **Decide the name** before anything is published. `tactus` is a placeholder;
    renaming is a directory move plus package names now, and an ecosystem
    problem later.

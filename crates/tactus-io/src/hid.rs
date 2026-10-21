@@ -348,6 +348,51 @@ impl Device {
         Ok(Some(decode_input(report)?))
     }
 
+    /// Wait for an input report and return its **raw bytes**, including the
+    /// leading report id.
+    ///
+    /// [`Device::poll_input`] is the one to use for ordinary work: it returns
+    /// meaning rather than bytes. This exists for the two jobs that genuinely
+    /// need the wire form:
+    ///
+    /// - A host that wants to do its own decoding, or to log a session for
+    ///   later analysis.
+    /// - Reverse-engineering the reports this SDK does not model yet.
+    ///   [`InputReport::Unmodelled`] deliberately carries only an id and a
+    ///   length, so a decoded poll cannot tell you what is *in* report `0x40`
+    ///   or `0xAA`. This can.
+    ///
+    /// Returns the number of bytes written into `out`, or `None` on timeout —
+    /// an idle keyboard, not an error. Bytes beyond the return value are left
+    /// as they were, so a caller must slice by the returned length rather than
+    /// trusting the whole buffer.
+    ///
+    /// `out` must hold at least [`MAX_INPUT_REPORT_LEN`] bytes. A shorter
+    /// buffer is refused rather than silently truncating a report, because a
+    /// truncated report decodes as a different, plausible one.
+    pub fn poll_raw(&self, timeout: Duration, out: &mut [u8]) -> Result<Option<usize>, IoError> {
+        if out.len() < MAX_INPUT_REPORT_LEN {
+            return Err(IoError::FeatureBufferTooSmall {
+                id: 0,
+                got: out.len(),
+                need: MAX_INPUT_REPORT_LEN,
+                payload: MAX_INPUT_REPORT_LEN - 1,
+            });
+        }
+        let millis = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+        let read = self
+            .inner
+            .read_timeout(out, millis)
+            .map_err(|source| IoError::Hid {
+                op: "read_timeout",
+                source,
+            })?;
+        if read == 0 {
+            return Ok(None);
+        }
+        Ok(Some(read))
+    }
+
     /// Set the light guide: one value per key, each `0..=127`.
     ///
     /// Validation and framing are [`tactus_hid::encode_light_guide`]'s job;

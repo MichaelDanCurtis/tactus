@@ -43,8 +43,27 @@ their declared range**, and invent no names. Mapping index → control requires
 pressing each control and observing which field changes. Guessing would be
 worse than leaving it unnamed, because callers would build on the guess.
 
-**Keys and velocity do not appear here.** Note data arrives over MIDI on the
-`Main` port. HID carries the control surface.
+**Keys and velocity do not appear here.** Note data — and polyphonic
+aftertouch — arrives over MIDI on the `Main` port.
+
+> ### Correction (hardware observation, supersedes the rest of this section)
+>
+> This document previously ended the paragraph above with "HID carries the
+> control surface." **That is false for this generation.** No HID input report
+> has ever been observed to arrive from an S88 MK3, with the vendor's agents
+> running *or* with all four of them stopped. The control surface runs over the
+> device's vendor interface, which the device itself names **ODR** — see
+> [mk3-usb-interfaces.md](mk3-usb-interfaces.md).
+>
+> The input-report *structure* documented below is still accurate: it is read
+> from the live descriptor and the firmware declares every one of these
+> reports. What is wrong is the assumption that declaring them means sending
+> them. **Output is unaffected** — light-guide report `0x82` is accepted by the
+> hardware — and so are feature reads.
+>
+> The error is worth naming precisely, because the rule it broke is this
+> document's own: a declared capability is not an observed one. The descriptor
+> is a vendor artifact like any other.
 
 ## Input reports
 
@@ -149,8 +168,13 @@ looking for.
 
 ## What would complete this
 
-1. **Semantic mapping.** Press each button, move each encoder, and record which
-   field index changes. Entirely mechanical, needs only hardware and a person.
+1. **Semantic mapping.** ~~Press each button, move each encoder, and record
+   which field index changes. Entirely mechanical, needs only hardware and a
+   person.~~ **Retracted.** This assumed the control surface reports over HID.
+   It does not; there is nothing to capture here. Mapping index to control is
+   blocked on an ODR implementation, and may turn out to be meaningless for
+   MK3 if these reports are vestigial. See
+   [mk3-usb-interfaces.md](mk3-usb-interfaces.md).
 2. **Characterise `0x40` and `0xAA`.** 13 bytes and 31 × 16 bit respectively,
    both currently unexplained.
 3. **Identify the output reports beyond the light guide.** `0xA1`–`0xA4` are

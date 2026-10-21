@@ -231,3 +231,70 @@ before relying on any of it:
 
 Record the firmware version alongside: the protocol version byte makes firmware
 a load-bearing variable.
+
+---
+
+# Addendum 2: step 1 of the verification order, done
+
+**Evidence class: hardware observation.** An attached S88 MK3, firmware
+revision `bcdDevice = 0x0204`. Input captured on all three ports
+simultaneously; **nothing was transmitted**, so this is the clean baseline step
+1 asks for.
+
+## What the keybed sends
+
+Playing one key, verbatim from the capture:
+
+```text
+Main | note on   ch1  note 43  vel 36   | 90 2B 24
+Main | poly at   ch1  note 43  val 89   | A0 2B 59
+Main | poly at   ch1  note 43  val 94   | A0 2B 5E
+...                                       (≈60 updates over 2.2 s)
+Main | poly at   ch1  note 43  val 127  | A0 2B 7F
+Main | poly at   ch1  note 43  val 0    | A0 2B 00
+Main | note off  ch1  note 43  vel 50   | 80 2B 32
+```
+
+Two things worth recording:
+
+- **Polyphonic aftertouch**, `0xA0`, addressed per note — not channel
+  aftertouch (`0xD0`). The keybed tracks pressure per key.
+- **Note-off carries a release velocity** (`0x80 2B 32`), rather than the
+  note-on-with-zero-velocity form.
+
+## What the control surface sends: nothing
+
+Buttons, knobs and the buttons under the display were operated throughout. On
+`Main`, `DAW` and `Ext`, with NI's four background agents running *and* with
+all of them stopped:
+
+**Zero control-change messages. Zero SysEx.**
+
+So the channel-16 CC map in the main body is not merely unverified — it is
+**not passively observable**. It cannot be confirmed by listening, which is
+what step 1 was hoping for.
+
+The reading that fits both this and the ODR findings: the CC map is a mode the
+device enters when a host claims the DAW port, and the handshake in step 2 is
+what claims it. That is consistent with the map containing *host → device*
+"LED / capability enables", which only make sense once a conversation has
+started.
+
+It also means the control surface has **two** possible routes — ODR (what the
+vendor uses, see [mk3-usb-interfaces.md](mk3-usb-interfaces.md)) and the DAW
+port after a handshake (what a third-party DAW uses). For this SDK the second
+is far more attractive: it is ordinary MIDI, it needs no vendor USB transport,
+and the semantics arrive already named.
+
+## Status of the remaining steps
+
+| Step | Status |
+|---|---|
+| 1. Baseline capture, send nothing | **done** — above |
+| 2. Send `BF 01 04`, observe the response | not done |
+| 3. Send one `track_name` SysEx, watch the screen | not done |
+
+Step 2 is now the highest-value experiment in this project: it is three bytes
+of ordinary MIDI control change from the vendor's own script, and if it does
+switch the surface on, the entire named CC map becomes verifiable and semantic
+control naming is solved without implementing ODR at all.
