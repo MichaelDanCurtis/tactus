@@ -51,12 +51,26 @@ E. Akai MPC       — reuses A's architecture, later
 
 | Sub | Scope | Gating unknowns |
 |---|---|---|
-| A1 | Device layer: enumeration, identity, hotplug, HID/MIDI/USB transports | none |
-| A2 | Input: keys, aftertouch, pedals, wheels, touch strips, knobs, buttons, encoders | none |
-| A3 | Light guide: per-key RGB | semantics of `OUT 0x82` payload |
+| A1 | Device layer: identity + port resolution **done**; platform I/O not started | none |
+| A2 | Input: HID report decoding **done** (structure); semantic naming open | which index is which physical control |
+| A3 | Light guide: encoder **done** | meaning of the 0..=127 palette values |
 | A4 | Display: pixel arm (MK2/Maschine) **done**; page arm (MK3) partial | ODR payload schemas, method-index registry |
 | A5 | C ABI + generated header | none |
-| A6 | Protocol documentation (this is a D1 deliverable, not a byproduct) | tracks A1–A4 |
+| A6 | Protocol documentation (a D1 deliverable, not a byproduct) — **4 documents written** | tracks A1–A4 |
+
+### Current crates
+
+| Crate | Scope | Tests |
+|---|---|---|
+| `tactus-core` | Geometry, surfaces, ARGB channels | 10 |
+| `tactus-display` | Pixel arm (MK2/Maschine) + page arm (MK3) | 35 |
+| `tactus-hid` | HID input decoding, light guide, model identity | 16 |
+| `tactus-midi` | DAW SysEx protocol, CC map, port resolution | 28 |
+
+89 tests, clippy clean under `-D warnings`, rustdoc clean.
+
+**Not yet started:** platform I/O (opening real HID and MIDI endpoints), the
+C ABI (A5), and semantic control naming.
 
 ### B. `nks` — split further, because these fail independently
 

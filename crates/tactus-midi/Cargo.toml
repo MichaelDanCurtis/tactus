@@ -1,0 +1,10 @@
+[package]
+name = "tactus-midi"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Transport-agnostic MIDI protocol support for Kontrol S-series MK3 hardware"
+
+[dependencies]
+thiserror.workspace = true
