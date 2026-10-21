@@ -1,0 +1,20 @@
+[package]
+name = "tactus-ffi"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Stable C ABI for the Tactus control-surface SDK"
+
+[lib]
+name = "tactus"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+tactus-core = { path = "../tactus-core", version = "0.1.0" }
+tactus-display = { path = "../tactus-display", version = "0.1.0" }
+tactus-hid = { path = "../tactus-hid", version = "0.1.0" }
+tactus-midi = { path = "../tactus-midi", version = "0.1.0" }
+
+[build-dependencies]
+cbindgen = "0.29"

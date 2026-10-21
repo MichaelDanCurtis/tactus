@@ -1,0 +1,14 @@
+language = "C"
+pragma_once = true
+include_guard = "TACTUS_H"
+documentation = true
+documentation_style = "doxy"
+header = "/* Generated from Rust by cbindgen. Do not edit by hand. */"
+
+[parse]
+parse_deps = false
+
+[enum]
+# Without this, variants land in the global C namespace as bare `Ok`, `S88`,
+# `Browser` and so on, which collides with user code.
+prefix_with_name = true
