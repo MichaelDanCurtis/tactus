@@ -4,8 +4,15 @@
  * Build (from the repo root):
  *   cargo build -p tactus-ffi
  *   cc -I crates/tactus-ffi/include -o /tmp/tactus_smoke examples/c/smoke.c \
- *      target/debug/libtactus.a
+ *      target/debug/libtactus.a \
+ *      -framework CoreFoundation -framework IOKit -framework CoreMIDI \
+ *      -framework CoreAudio -framework AppKit -lobjc -liconv
  *   /tmp/tactus_smoke
+ *
+ * The frameworks are needed even though this file calls nothing that uses
+ * them: one static library carries the whole SDK, so linking it pulls in the
+ * platform I/O layer regardless of which half you call. See examples/c/README
+ * for the authoritative way to get this list for your platform.
  */
 #include <stdio.h>
 #include <stdlib.h>

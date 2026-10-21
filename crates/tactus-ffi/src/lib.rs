@@ -27,15 +27,19 @@
 //! # Versioning
 //!
 //! [`tactus_abi_version`] returns a packed integer a caller can check before
-//! trusting struct layouts. Bump [`ABI_VERSION_MINOR`] for additions, and
-//! [`ABI_VERSION_MAJOR`] for anything that changes an existing layout or
+//! trusting struct layouts. Bump [`TACTUS_ABI_VERSION_MINOR`] for additions, and
+//! [`TACTUS_ABI_VERSION_MAJOR`] for anything that changes an existing layout or
 //! signature.
 
 #![deny(missing_docs)]
 #![allow(clippy::missing_safety_doc)] // every unsafe fn documents its contract in prose below
 
+use std::cell::RefCell;
+use std::ffi::CString;
 use std::panic::catch_unwind;
 use std::slice;
+
+pub mod device;
 
 use tactus_core::{Rect, Surface};
 use tactus_display::{Compression, Frame, PixelFormat, encode_frame, max_encoded_len};
@@ -43,9 +47,41 @@ use tactus_hid::{InputReport, Model, encode_light_guide};
 use tactus_midi::daw;
 
 /// Major ABI version. Changes when an existing layout or signature changes.
-pub const ABI_VERSION_MAJOR: u32 = 0;
+pub const TACTUS_ABI_VERSION_MAJOR: u32 = 0;
 /// Minor ABI version. Changes when functionality is added compatibly.
-pub const ABI_VERSION_MINOR: u32 = 1;
+pub const TACTUS_ABI_VERSION_MINOR: u32 = 2;
+
+// These are spelled as literals, not as `tactus_hid::FEATURE_BUFFER_LEN`,
+// because cbindgen runs with `parse_deps = false` and silently *omits* any
+// constant whose value it cannot evaluate — leaving a header that quietly
+// lacks a size this crate's own docs tell C callers to use. The compile-time
+// assertions below make the duplication safe: if a protocol constant ever
+// moves, this crate stops building rather than shipping a stale header.
+//
+// They carry the `TACTUS_` prefix because constants reach C as plain
+// `#define`s, with no namespace to live in.
+
+/// Buffer size for a feature-report exchange: report id plus payload.
+pub const TACTUS_FEATURE_BUFFER_LEN: usize = 33;
+
+/// Payload bytes in a feature report, excluding the report id.
+pub const TACTUS_FEATURE_PAYLOAD_LEN: usize = 32;
+
+/// Largest HID input report, including its report id.
+pub const TACTUS_MAX_INPUT_REPORT_LEN: usize = 63;
+
+/// Highest accepted light-guide value.
+pub const TACTUS_LIGHT_GUIDE_MAX: u8 = 127;
+
+/// Keys on the largest model, and so the length
+/// [`device::tactus_device_set_light_guide`] needs for an S88.
+pub const TACTUS_MAX_KEYS: usize = 88;
+
+const _: () = assert!(TACTUS_FEATURE_BUFFER_LEN == tactus_hid::FEATURE_BUFFER_LEN);
+const _: () = assert!(TACTUS_FEATURE_PAYLOAD_LEN == tactus_hid::FEATURE_PAYLOAD_LEN);
+const _: () = assert!(TACTUS_MAX_INPUT_REPORT_LEN == tactus_hid::MAX_INPUT_REPORT_LEN);
+const _: () = assert!(TACTUS_LIGHT_GUIDE_MAX == tactus_hid::LIGHT_GUIDE_MAX);
+const _: () = assert!(TACTUS_MAX_KEYS == Model::S88.keys());
 
 /// Status returned by every exported function.
 #[repr(i32)]
@@ -65,6 +101,22 @@ pub enum TactusStatus {
     NonAsciiText = -5,
     /// Geometry was invalid for the requested operation.
     InvalidGeometry = -6,
+
+    /// No matching device is attached.
+    DeviceNotFound = -7,
+    /// More than one device matched, so the choice would be a guess.
+    AmbiguousDevice = -8,
+    /// The device was found but could not be opened — commonly a permission
+    /// problem, or another process holding it exclusively.
+    OpenFailed = -9,
+    /// The SDK refused the operation by policy, not because the platform
+    /// failed. Retrying will not help; see [`tactus_last_error_message`].
+    Refused = -10,
+    /// The platform's HID or MIDI layer reported a failure.
+    IoFailure = -11,
+    /// No MIDI port matched the requested role.
+    PortNotFound = -12,
+
     /// An internal error, including a caught panic. Should never be seen.
     Internal = -100,
 }
@@ -77,12 +129,122 @@ fn guard<F: FnOnce() -> TactusStatus>(f: F) -> TactusStatus {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Last error message
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+}
+
+/// Record a diagnostic for the most recent failure on this thread.
+///
+/// The I/O layer's errors name the value that caused them — which model was
+/// not found, which report id was refused, how many candidates were ambiguous.
+/// A bare status code would throw all of that away, so it is kept here for a
+/// caller to retrieve with [`tactus_last_error_message`].
+pub(crate) fn set_last_error(message: impl std::fmt::Display) {
+    let text = message.to_string();
+    // A device-supplied string (a serial, a port name) could in principle
+    // contain a NUL, which `CString` rejects. Substitute rather than lose the
+    // message: the diagnostic matters more than the exact bytes, and device
+    // strings are data we display, never something we execute.
+    let sanitised: Vec<u8> = text
+        .into_bytes()
+        .into_iter()
+        .map(|b| if b == 0 { b'?' } else { b })
+        .collect();
+    let cstring = CString::new(sanitised).unwrap_or_default();
+    LAST_ERROR.with(|cell| {
+        if let Ok(mut slot) = cell.try_borrow_mut() {
+            *slot = Some(cstring);
+        }
+    });
+}
+
+/// Drop any recorded diagnostic, so a stale message cannot be mistaken for
+/// the result of the call in progress.
+pub(crate) fn clear_last_error() {
+    LAST_ERROR.with(|cell| {
+        if let Ok(mut slot) = cell.try_borrow_mut() {
+            *slot = None;
+        }
+    });
+}
+
+/// Copy the diagnostic for this thread's most recent failure into `out`.
+///
+/// The message is written NUL-terminated. `out_len`, when non-null, receives
+/// the length **excluding** the terminator.
+///
+/// Pass a null `out` with a non-null `out_len` to ask how much space is
+/// needed; the required capacity *including* the terminator is
+/// `*out_len + 1`. A buffer that is too small yields
+/// [`TactusStatus::BufferTooSmall`] and sets `out_len` the same way, so one
+/// retry with the reported size always succeeds.
+///
+/// Meaningful only immediately after a function returned a non-`Ok` status on
+/// the same thread. Each device or MIDI entry point clears this first, so a
+/// message is never attributable to an earlier call. Functions can fail
+/// without recording anything, in which case the message is empty — branch on
+/// the status code, and treat this as detail for a human.
+///
+/// # Safety
+///
+/// `out` must be writable for `out_cap` bytes, or null. `out_len` must be
+/// writable, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tactus_last_error_message(
+    out: *mut core::ffi::c_char,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> TactusStatus {
+    guard(|| {
+        LAST_ERROR.with(|cell| {
+            let slot = match cell.try_borrow() {
+                Ok(s) => s,
+                Err(_) => return TactusStatus::Internal,
+            };
+            let bytes = slot.as_ref().map(|c| c.as_bytes()).unwrap_or(&[]);
+            let len = bytes.len();
+
+            if !out_len.is_null() {
+                unsafe { *out_len = len };
+            }
+            if out.is_null() {
+                // A sizing query is only valid if there is somewhere to put
+                // the size.
+                return if out_len.is_null() {
+                    TactusStatus::NullArgument
+                } else {
+                    TactusStatus::Ok
+                };
+            }
+            if out_cap < len + 1 {
+                return TactusStatus::BufferTooSmall;
+            }
+            let dst = unsafe { slice::from_raw_parts_mut(out.cast::<u8>(), len + 1) };
+            let Some((body, rest)) = dst.split_at_mut_checked(len) else {
+                return TactusStatus::Internal;
+            };
+            body.copy_from_slice(bytes);
+            match rest.first_mut() {
+                Some(terminator) => {
+                    *terminator = 0;
+                    TactusStatus::Ok
+                }
+                None => TactusStatus::Internal,
+            }
+        })
+    })
+}
+
 /// The ABI version, packed as `(major << 16) | minor`.
 ///
 /// Call this before trusting any struct layout in this header.
 #[unsafe(no_mangle)]
 pub extern "C" fn tactus_abi_version() -> u32 {
-    (ABI_VERSION_MAJOR << 16) | ABI_VERSION_MINOR
+    (TACTUS_ABI_VERSION_MAJOR << 16) | TACTUS_ABI_VERSION_MINOR
 }
 
 /// A human-readable status name, as a static NUL-terminated C string.
@@ -98,6 +260,12 @@ pub extern "C" fn tactus_status_name(status: i32) -> *const core::ffi::c_char {
         -4 => b"invalid argument\0",
         -5 => b"non-ascii text\0",
         -6 => b"invalid geometry\0",
+        -7 => b"device not found\0",
+        -8 => b"ambiguous device\0",
+        -9 => b"open failed\0",
+        -10 => b"refused\0",
+        -11 => b"io failure\0",
+        -12 => b"port not found\0",
         -100 => b"internal error\0",
         _ => b"unknown\0",
     };
@@ -295,29 +463,15 @@ impl TactusInputReport {
             tail: 0,
         }
     }
-}
 
-/// Decode a complete HID input report, **including** its leading report id.
-///
-/// # Safety
-/// `report` must point to `report_len` readable bytes. `out` must be writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tactus_decode_input(
-    report: *const u8,
-    report_len: usize,
-    out: *mut TactusInputReport,
-) -> TactusStatus {
-    guard(|| {
-        if report.is_null() || out.is_null() {
-            return TactusStatus::NullArgument;
-        }
-        let bytes = unsafe { slice::from_raw_parts(report, report_len) };
-        let decoded = match tactus_hid::decode_input(bytes) {
-            Ok(d) => d,
-            Err(_) => return TactusStatus::InvalidArgument,
-        };
-        let mut r = TactusInputReport::zeroed();
-        r.report_id = bytes.first().copied().unwrap_or(0);
+    /// Flatten a decoded report into the C struct.
+    ///
+    /// Shared by [`tactus_decode_input`] and
+    /// [`device::tactus_device_poll_input`] so there is one layout mapping
+    /// rather than two that can drift apart.
+    pub(crate) fn from_decoded(report_id: u8, decoded: InputReport) -> Self {
+        let mut r = Self::zeroed();
+        r.report_id = report_id;
         match decoded {
             InputReport::Controls(c) => {
                 r.kind = TactusInputKind::Controls;
@@ -354,6 +508,31 @@ pub unsafe extern "C" fn tactus_decode_input(
                 r.report_id = id;
             }
         }
+        r
+    }
+}
+
+/// Decode a complete HID input report, **including** its leading report id.
+///
+/// # Safety
+/// `report` must point to `report_len` readable bytes. `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tactus_decode_input(
+    report: *const u8,
+    report_len: usize,
+    out: *mut TactusInputReport,
+) -> TactusStatus {
+    guard(|| {
+        if report.is_null() || out.is_null() {
+            return TactusStatus::NullArgument;
+        }
+        let bytes = unsafe { slice::from_raw_parts(report, report_len) };
+        let decoded = match tactus_hid::decode_input(bytes) {
+            Ok(d) => d,
+            Err(_) => return TactusStatus::InvalidArgument,
+        };
+        let id = bytes.first().copied().unwrap_or(0);
+        let r = TactusInputReport::from_decoded(id, decoded);
         unsafe { *out = r };
         TactusStatus::Ok
     })
@@ -647,8 +826,8 @@ mod tests {
     #[test]
     fn abi_version_packs_major_and_minor() {
         let v = tactus_abi_version();
-        assert_eq!(v >> 16, ABI_VERSION_MAJOR);
-        assert_eq!(v & 0xFFFF, ABI_VERSION_MINOR);
+        assert_eq!(v >> 16, TACTUS_ABI_VERSION_MAJOR);
+        assert_eq!(v & 0xFFFF, TACTUS_ABI_VERSION_MINOR);
     }
 
     #[test]

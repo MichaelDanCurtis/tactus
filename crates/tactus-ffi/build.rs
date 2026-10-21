@@ -26,5 +26,6 @@ fn main() {
         Err(e) => println!("cargo:warning=cbindgen could not generate tactus.h: {e}"),
     }
     println!("cargo:rerun-if-changed=src/lib.rs");
+    println!("cargo:rerun-if-changed=src/device.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 }

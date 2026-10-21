@@ -769,6 +769,7 @@ dependencies = [
  "tactus-core",
  "tactus-display",
  "tactus-hid",
+ "tactus-io",
  "tactus-midi",
 ]
 
