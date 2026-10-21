@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn light_guide_rejects_out_of_range_through_the_abi() {
-        let mut values = vec![0u8; 88];
+        let mut values = [0u8; 88];
         values[10] = 200;
         let mut out = [0u8; 128];
         let mut len = 0usize;
@@ -784,7 +784,7 @@ mod tests {
     #[test]
     fn out_params_are_untouched_on_failure() {
         // A failed call must not leave the caller with half-updated state.
-        let values = vec![0u8; 10]; // wrong key count for an S88
+        let values = [0u8; 10]; // wrong key count for an S88
         let mut out = [0u8; 128];
         let mut len = 0xDEAD_BEEFusize;
         unsafe {
@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn display_frame_encodes_through_the_abi() {
-        let px = vec![0xFFFF_0000u32; 8 * 2];
+        let px = [0xFFFF_0000u32; 8 * 2];
         let mut out = vec![0u8; tactus_display_max_encoded_len(TactusPixelFormat::Rgb565, 8, 2)];
         let mut len = 0usize;
         unsafe {
@@ -946,7 +946,7 @@ mod tests {
 
     #[test]
     fn display_frame_rejects_odd_geometry_at_16bpp() {
-        let px = vec![0u32; 8 * 2];
+        let px = [0u32; 8 * 2];
         let mut out = vec![0u8; 4096];
         let mut len = 0usize;
         unsafe {
