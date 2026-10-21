@@ -244,6 +244,59 @@ at least 6 seconds: it waits for the client to speak first.
 So there is no authentication barrier to becoming an ODR client. What is
 missing is only the message format.
 
+## The session-level methods, from a packed string table
+
+**Evidence class: vendor binary.** A contiguous run of NUL-terminated strings
+at file offsets 5849764–5851356 of the arm64 slice. Being packed and
+consecutive, this is very likely the symbol table the registry interns, which
+would make **table order the index assignment** — though the construction code
+has not been read, so that is inference.
+
+The session layer, which the `client_*` names alone do not reveal:
+
+```text
+handshake            goodbye              heartbeat
+host_protocol_version                     utc_clock
+settings_set         system_command       global_notification
+accessibility_set_status                  midi_template_transfer_response
+assets_add           assets_remove        assets_reset
+disable_heartbeat_validation
+```
+
+**The session opener is `handshake`, not `instance_hello`.** Note also
+`disable_heartbeat_validation` appearing here as a *protocol field*, not only
+as the environment variable of the same name — so a client may be able to
+request heartbeat exemption in-band.
+
+## Blind probing does not work, and the reason is by design
+
+**Evidence class: host observation.** 36 combinations were sent to the live
+agent — framings {4-byte LE length, 4-byte BE length, 2-byte LE length, none}
+× methods {`handshake`, `instance_hello`, `client_info`, `client_id`,
+`host_protocol_version`} × forms {msgpack-RPC notify `[2, m, p]`, request
+`[0, id, m, p]`} × several parameter shapes.
+
+**Every one was silent.** No reply, no error, and no disconnect.
+
+That uniformity is the finding. A server that rejected bad framing would close
+the connection, and one that parsed it would answer; silence across every
+variant means the input is being absorbed. Which is exactly what
+`ni::odr::transport::self_healing_stream_parser` is named to do — resynchronise
+a corrupted stream without surfacing an error — and exactly why NI ships
+`NI_ODR_DISABLE_SELF_HEALING_PARSER`.
+
+So the trial-and-error loop has no feedback signal, and no amount of guessing
+improves it. Three routes remain, and all three need something this session
+could not do:
+
+| Route | Needs | Cost if available |
+|---|---|---|
+| Set `NI_ODR_DISABLE_SELF_HEALING_PARSER` + `NI_ODR_DISABLE_SYMBOL_REGISTRY` and probe again | Permission to launch the agent binary with environment variables set | Low — errors become loud and method names become literal strings |
+| Observe real Komplete Kontrol ↔ agent traffic | Permission to proxy the agent's socket under `/Users/Shared`, or a Frida attach | Low — copies a known-good handshake verbatim |
+| Derive the registry index assignment statically | Decompiling `symbol_registry_const`'s construction | High, and an off-by-one is indistinguishable from any other failure, because of the silence above |
+
+The first is by far the cheapest and it is the vendor's own debug path.
+
 ## The route into host mode
 
 Assembled from the symbols above; **not yet executed**, so read it as the
