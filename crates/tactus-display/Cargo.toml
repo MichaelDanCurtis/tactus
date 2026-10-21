@@ -1,0 +1,11 @@
+[package]
+name = "tactus-display"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Display encoding for control-surface hardware: host-rendered pixels and device-rendered pages"
+
+[dependencies]
+tactus-core = { path = "../tactus-core", version = "0.1.0" }
+thiserror.workspace = true

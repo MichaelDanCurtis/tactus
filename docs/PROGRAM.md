@@ -54,7 +54,7 @@ E. Akai MPC       — reuses A's architecture, later
 | A1 | Device layer: enumeration, identity, hotplug, HID/MIDI/USB transports | none |
 | A2 | Input: keys, aftertouch, pedals, wheels, touch strips, knobs, buttons, encoders | none |
 | A3 | Light guide: per-key RGB | semantics of `OUT 0x82` payload |
-| A4 | Display | **blocked — see §5** |
+| A4 | Display: pixel arm (MK2/Maschine) **done**; page arm (MK3) partial | ODR payload schemas, method-index registry |
 | A5 | C ABI + generated header | none |
 | A6 | Protocol documentation (this is a D1 deliverable, not a byproduct) | tracks A1–A4 |
 
@@ -102,11 +102,38 @@ is keybed-sized not 128 note-indexed; no evidence for an `A0 00 00` "legacy LED 
 NI's own report-map table is **wrong** in two places against the real device, so always
 confirm against the live HID descriptor.
 
-## 5. The one open architectural question
+## 5. The architectural question — ANSWERED
 
-**Does the host push pixels to the MK3 display, or does the keyboard render its own pages?**
+**The MK3 keyboard renders its own UI. The host does not send pixels.**
 
-Everything found so far points away from a host-pushed framebuffer for MK3:
+Settled by decompiling the vendor's page-selection path and its symbol-to-enum
+lookup table. Full write-up and evidence in
+[protocol/mk3-display.md](protocol/mk3-display.md). Headlines:
+
+- The host selects one of four pages — `browser=0, mixer=1, parameter=2,
+  smartplay=3`, one byte — and supplies each a typed view-model.
+- The entire display surface is semantic (`set_trackinfo`, `set_meters`,
+  `parameter_page_set_model`, `browser_set_sounds`, `leds_set_lightguide`, …).
+  There is no `set_pixels`, `set_image`, `blit` or `draw`.
+- `renderer_version` is a property the **host queries from the device**.
+- Wire format is **msgpack-RPC**, size-prefixed, over a Unix socket — which
+  vindicates a community claim this project had earlier marked *questionable*.
+- A **software simulator** exists (`kks_mk3_simulator::prepareTCP`): the same
+  protocol over TCP, with no keyboard attached.
+
+**Consequences:**
+
+1. **There is no MK3 framebuffer to reverse-engineer, and no geometry to find.**
+   The earlier "post-v1 framebuffer spike" was chasing something that does not
+   exist for this generation. Dropping it is the single largest scope reduction
+   available, and it came from evidence rather than fatigue.
+2. A4 for MK3 is a documented RPC protocol — a smaller, more stable target than
+   a raster format with an unknown panel size.
+3. The pixel path remains necessary for **MK2, Maschine and Traktor**, whose
+   geometry is known. Hence two display arms, not one.
+
+The reasoning that led here is preserved below, because it is also the evidence
+that the negative is sound rather than a failed search:
 
 - The device DB stores all three MK3 keyboards as `0×0`, format `0xFF` — a sentinel,
   verified against known-good siblings (S49 MK2 = `0x60`, 480×272; Traktor S4 MK3 =
@@ -122,12 +149,12 @@ Everything found so far points away from a host-pushed framebuffer for MK3:
   msgpack over a Unix socket at
   `/Users/Shared/Native Instruments/com.native-instruments.odr_agent.kks`.
 
-If the keyboard renders its own pages, **there is no framebuffer to reverse-engineer**,
-no geometry to recover, and A4 becomes "emit structured page/parameter content" — a
-smaller, safer, more stable target. If a pixel path does exist, A4 is the NHL2-style
-stream already documented, and we need the geometry.
+All of which the answer above confirms.
 
-**A4 is deliberately not designed until this is answered.** Investigation in flight.
+**Status of A4:** the display layer now exists, with both arms. The pixel arm is
+complete and byte-exactly tested. The page arm models page selection (fully
+recovered) and the capability surface (observed), but not payload schemas — those
+need the method-index registry enumerated or a session observed.
 
 ## 6. Open-source boundaries
 
