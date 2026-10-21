@@ -1,0 +1,11 @@
+target/
+.build/
+.swiftpm/
+node_modules/
+dist/
+.DS_Store
+.omc/
+.superpowers/
+captures/
+*.arm64
+*.x86_64
