@@ -111,18 +111,42 @@ standing rule holds: **confirm against the live device.**
   the transport without testing it.
 - Keys, velocity and **polyphonic aftertouch** do arrive over MIDI on `Main`,
   verified in the same session — see [mk3-daw-port.md](mk3-daw-port.md).
-- Nothing about the control surface arrives over MIDI: no control change on
-  `Main`, `DAW` or `Ext` while buttons and knobs were operated, with and without
-  the vendor's agents running.
+- ~~Nothing about the control surface arrives over MIDI.~~ **False — retracted.**
+  The knobs and buttons below the display send control change on **channel 1**
+  per the factory MIDI template, and a relative encoder reports on the `DAW`
+  port. The original test pressed *transport* buttons, which the template does
+  not map, and watched for channel 16. See
+  [mk3-midi-mode.md](mk3-midi-mode.md).
 
 ## Negative-search bounds
 
 Stated so the negatives above are read as bounded searches rather than proof:
 
+> ### The negatives above were recorded in one device mode only
+>
+> **This was an uncontrolled variable and it should have been stated from the
+> start.** The keyboard was in **MIDI mode** throughout every test on this
+> page. The S-series MK3 is a mode-switching device, and "this interface
+> carries no input" may be a property of the mode rather than of the
+> interface.
+>
+> What this does **not** weaken: the three positive findings. NI imports zero
+> `IOHID*` symbols, the device names interface 3 `ODR`, and the vendor's
+> symbols carry a matching USB transport. Those are mode-independent facts
+> about code and descriptors.
+>
+> What it **does** weaken: "the MK3 emits no HID input reports" and "no
+> control change arrives on any port". Both should be read as **"not in MIDI
+> mode"** until repeated in host/NKS mode. The conclusion that the control
+> surface lives on ODR is still the best explanation of the positives, but the
+> HID silence is no longer independent evidence for it.
+
 | Checked | Not checked |
 |---|---|
 | `ioreg` interface and endpoint-count enumeration on one S88 MK3 | An S49 or S61 MK3; a second S88 |
-| HID input with vendor agents running, and with all four stopped | HID input after sending any of the undocumented output reports |
-| MIDI in on all three ports, agents running and stopped | MIDI in after a DAW-port handshake (`BF 01 04`) has been sent |
+| HID input with vendor agents running, and with all four stopped — **in MIDI mode only** | **Any other device mode**; HID input after sending any of the undocumented output reports |
+| MIDI in on all three ports, agents running and stopped — **in MIDI mode only** | **Any other device mode** |
+| DAW-port handshake `BF 01 04` sent and answered (see below) | Whether the surface reports after a handshake in a non-MIDI mode |
 | `IOHID*` and `IOUSB*` imports of `NIHardwareConnectionService` | `NIHardwareAgent`, `NIHostIntegrationAgent`, `NTKDaemon`, Komplete Kontrol itself |
 | Device revision and speed from the device node | The ODR endpoint addresses, types and packet sizes — `ioreg` did not expose pipe children for an unopened interface |
+| Whether a MIDI template was assigned to the device | — the vendor ships `ni::odr::agent::midi_template_transfer_mediator`, so templates are pushed over ODR, and an unassigned template is a plausible reason for silent controls in MIDI mode |

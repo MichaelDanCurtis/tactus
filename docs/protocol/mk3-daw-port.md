@@ -268,11 +268,18 @@ Buttons, knobs and the buttons under the display were operated throughout. On
 `Main`, `DAW` and `Ext`, with NI's four background agents running *and* with
 all of them stopped:
 
-**Zero control-change messages. Zero SysEx.**
+**Zero channel-16 control change. Zero SysEx.**
+
+> **Correction.** This originally read "zero control-change messages", which was
+> wrong. Channel-**1** control change was arriving throughout, from the factory
+> MIDI template — see [mk3-midi-mode.md](mk3-midi-mode.md). The claim is
+> accurate only for **channel 16**, this document's namespace. Two errors
+> compounded: the controls exercised were transport buttons, which the template
+> does not map, and only channel 16 was being looked for.
 
 So the channel-16 CC map in the main body is not merely unverified — it is
-**not passively observable**. It cannot be confirmed by listening, which is
-what step 1 was hoping for.
+**not passively observable** in MIDI mode. It cannot be confirmed by listening,
+which is what step 1 was hoping for.
 
 The reading that fits both this and the ODR findings: the CC map is a mode the
 device enters when a host claims the DAW port, and the handshake in step 2 is
@@ -291,7 +298,7 @@ and the semantics arrive already named.
 | Step | Status |
 |---|---|
 | 1. Baseline capture, send nothing | **done** — above |
-| 2. Send `BF 01 04`, observe the response | not done |
+| 2. Send `BF 01 04`, observe the response | **done — the device answers.** `BF 05 00` (BANK_MAPPING 0) then `BF 01 04` (protocol version 4), ~1.5 s after send, reproduced across two runs. First hardware confirmation of this protocol beyond port naming. It did **not** activate the channel-16 control map, nor did `BF 06 01` or the `BF 30/31/32 03` navigation enables added in stages. `BF 02 00` was sent to release each time. |
 | 3. Send one `track_name` SysEx, watch the screen | not done |
 
 Step 2 is now the highest-value experiment in this project: it is three bytes
