@@ -12,6 +12,9 @@ use std::time::Duration;
 use rmpv::Value;
 use tactus_odr::{Client, OdrError, Registry};
 
+/// (label, fields inside `plugin_data`, fields beside it)
+type Variant<'a> = (&'a str, Vec<(&'a str, Value)>, Vec<(&'a str, Value)>);
+
 fn log_path() -> String {
     format!(
         "{}/Library/Logs/Native Instruments/NIHardwareConnectionService.log",
@@ -25,10 +28,10 @@ fn log_len() -> u64 {
 
 fn log_since(offset: u64) -> String {
     let mut out = String::new();
-    if let Ok(mut f) = std::fs::File::open(log_path()) {
-        if f.seek(SeekFrom::Start(offset)).is_ok() {
-            let _ = f.read_to_string(&mut out);
-        }
+    if let Ok(mut f) = std::fs::File::open(log_path())
+        && f.seek(SeekFrom::Start(offset)).is_ok()
+    {
+        let _ = f.read_to_string(&mut out);
     }
     out
 }
@@ -47,15 +50,28 @@ fn main() -> Result<(), OdrError> {
 
     let s = |t: &str| Value::String(t.into());
     let m = |pairs: Vec<(&str, Value)>| {
-        Value::Map(pairs.into_iter().map(|(k, v)| (Value::String(k.into()), v)).collect())
+        Value::Map(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (Value::String(k.into()), v))
+                .collect(),
+        )
     };
     let u = |n: u32| Value::from(n);
     let one = |id: Value, entry: Value| Value::Map(vec![(id, entry)]);
     // (label, extra fields inside plugin_data, extra fields beside it)
     let cp = |inner: Vec<(&str, Value)>| {
-        vec![("parameters", one(u(0), m(vec![("continuous_parameter", m(inner))])))]
+        vec![(
+            "parameters",
+            one(u(0), m(vec![("continuous_parameter", m(inner))])),
+        )]
     };
-    let pv = || m(vec![("value", Value::F64(0.5)), ("display_value", s("50%"))]);
+    let pv = || {
+        m(vec![
+            ("value", Value::F64(0.5)),
+            ("display_value", s("50%")),
+        ])
+    };
     let with_style = |style: Option<Value>| {
         let mut inner = vec![("parameter_value", pv())];
         if let Some(st) = style {
@@ -67,23 +83,40 @@ fn main() -> Result<(), OdrError> {
     let good_param = || with_style(st_nil("knob_parameter_style"));
     let hov = |layout: Value| vec![("host_owned_viewstate", layout)];
     let section = |fields: Vec<(&str, Value)>| {
-        hov(m(vec![("nks1_layout", Value::Array(vec![Value::Array(vec![m(fields)])])),
-                   ("nks2_layout", Value::Nil)]))
+        hov(m(vec![
+            (
+                "nks1_layout",
+                Value::Array(vec![Value::Array(vec![m(fields)])]),
+            ),
+            ("nks2_layout", Value::Nil),
+        ]))
     };
-    let empty = || Value::Array(vec![]);
-    let variants: Vec<(&str, Vec<(&str, Value)>, Vec<(&str, Value)>)> = vec![
-        ("placement = {}", good_param(), section(vec![
-            ("section_name", s("Main")),
-            ("parameters", Value::Array(vec![m(vec![])])),
-        ])),
-        ("placement = nil (an empty knob slot)", good_param(), section(vec![
-            ("section_name", s("Main")),
-            ("parameters", Value::Array(vec![Value::Nil])),
-        ])),
+    let variants: Vec<Variant<'_>> = vec![
+        (
+            "placement = {}",
+            good_param(),
+            section(vec![
+                ("section_name", s("Main")),
+                ("parameters", Value::Array(vec![m(vec![])])),
+            ]),
+        ),
+        (
+            "placement = nil (an empty knob slot)",
+            good_param(),
+            section(vec![
+                ("section_name", s("Main")),
+                ("parameters", Value::Array(vec![Value::Nil])),
+            ]),
+        ),
     ];
     let base_missing = [
-        "background", "parameters", "plugin_color", "nks_control_color",
-        "device_owned_viewstate", "host_owned_viewstate", "parameter_style",
+        "background",
+        "parameters",
+        "plugin_color",
+        "nks_control_color",
+        "device_owned_viewstate",
+        "host_owned_viewstate",
+        "parameter_style",
     ];
 
     for (label, inner, outer) in variants {
@@ -120,9 +153,7 @@ fn main() -> Result<(), OdrError> {
             .filter_map(|l| l.split("unexpected key found: ").nth(1))
             .map(str::trim)
             .collect();
-        println!(
-            "  {label:<30} ok   new-missing={missing:?} unexpected={unexpected:?}"
-        );
+        println!("  {label:<30} ok   new-missing={missing:?} unexpected={unexpected:?}");
     }
     Ok(())
 }

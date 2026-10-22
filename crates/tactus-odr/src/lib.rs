@@ -282,6 +282,25 @@ pub fn new_uuid() -> Result<([u8; 16], String), OdrError> {
     Ok((raw, text))
 }
 
+/// One knob on a parameter page.
+///
+/// `value` is the normalised position, `0.0..=1.0`; `display` is the text the
+/// screen shows for it, such as `"50%"` or `"-6.0 dB"`. The device draws both.
+#[derive(Debug, Clone, Copy)]
+pub struct Knob<'a> {
+    /// Parameter id. Placements on the page refer to the parameter by this.
+    pub id: u32,
+    /// The label under the knob.
+    pub name: &'a str,
+    /// Normalised position.
+    pub value: f64,
+    /// Text shown for the current value.
+    pub display: &'a str,
+}
+
+/// The most knobs one NKS1 section can place.
+pub const KNOBS_PER_SECTION: usize = 8;
+
 /// A connected ODR client.
 #[derive(Debug)]
 pub struct Client {
@@ -578,6 +597,89 @@ impl Client {
         )]);
         let args = self.device_args(serial, vec![body]);
         self.notify_symbol("send_global_notification", args)
+    }
+
+    /// Publish a parameter page: a plugin name and up to eight labelled knobs.
+    ///
+    /// Replaces the device's "no instrument loaded" page. Every field was
+    /// recovered from the agent's own warnings and confirmed to parse; see
+    /// `docs/protocol/mk3-odr-ipc.md`. No image is sent, so no asset handle is
+    /// involved — a malformed handle is known to abort the agent.
+    pub fn set_parameter_page(
+        &mut self,
+        serial: &str,
+        plugin_name: &str,
+        section_name: &str,
+        knobs: &[Knob<'_>],
+    ) -> Result<(), OdrError> {
+        if knobs.len() > KNOBS_PER_SECTION {
+            return Err(OdrError::Decode(format!(
+                "{} knobs given; an NKS1 section holds at most {KNOBS_PER_SECTION}",
+                knobs.len()
+            )));
+        }
+        let s = |t: &str| Value::String(t.into());
+        let map = |pairs: Vec<(&str, Value)>| {
+            Value::Map(pairs.into_iter().map(|(k, v)| (s(k), v)).collect())
+        };
+
+        // parameters: {id: {continuous_parameter: {parameter_value, parameter_style}}}
+        let parameters = Value::Map(
+            knobs
+                .iter()
+                .map(|k| {
+                    let entry = map(vec![(
+                        "continuous_parameter",
+                        map(vec![
+                            (
+                                "parameter_value",
+                                map(vec![
+                                    ("value", Value::F64(k.value)),
+                                    ("display_value", s(k.display)),
+                                ]),
+                            ),
+                            (
+                                "parameter_style",
+                                map(vec![("knob_parameter_style", Value::Nil)]),
+                            ),
+                        ]),
+                    )]);
+                    (Value::from(k.id), entry)
+                })
+                .collect(),
+        );
+
+        // One page, one section, one placement per knob.
+        let placements = Value::Array(
+            knobs
+                .iter()
+                .map(|k| map(vec![("id", Value::from(k.id)), ("name", s(k.name))]))
+                .collect(),
+        );
+        let layout = map(vec![
+            (
+                "nks1_layout",
+                Value::Array(vec![Value::Array(vec![map(vec![
+                    ("section_name", s(section_name)),
+                    ("parameters", placements),
+                ])])]),
+            ),
+            ("nks2_layout", Value::Nil),
+        ]);
+
+        let body = map(vec![
+            (
+                "plugin_data",
+                map(vec![
+                    ("name", s(plugin_name)),
+                    ("background", Value::Nil),
+                    ("parameters", parameters),
+                ]),
+            ),
+            ("host_owned_viewstate", layout),
+        ]);
+        let args = self.device_args(serial, vec![body]);
+        self.notify_symbol("client_parameter_page_set_data", args)
     }
 
     /// `[instance_uuid, serial, extra...]` — the order every device call uses.
