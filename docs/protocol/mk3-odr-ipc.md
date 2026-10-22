@@ -920,8 +920,29 @@ string form is fatal.
 `control_state` is the three-way button LED: `disabled` (not available), `off`
 (available, inactive), `on` (active).
 
-The owner observed the transport lights changing while this state was
-stepped. A per-step breakdown is pending.
+**Per-step check, confirmed by the device's owner.** `examples/lights.rs`
+changes one field at a time from a baseline (stopped, record off, every
+control `off`, nothing undoable), paced by the owner with the preset buttons.
+The agent logged no warnings for any step.
+
+| Step | State sent | Result |
+|---|---|---|
+| Play | `transport: playing` | as expected |
+| Pause | `transport: paused` | as expected |
+| Record armed | `recording: armed` | as expected |
+| Recording | `transport: playing`, `recording: recording` | as expected |
+| Loop, Metro, Tempo, Count-in | each `control_state: on` | as expected |
+| Quantize | `can_quantize: true` | as expected |
+| All disabled | every `control_state: disabled` | as expected |
+| Everything on | all of the above together | as expected |
+| Undo | `undo_state: {can_undo: true}` | **no light** |
+| Redo | `undo_state: {can_redo: true}` | **no light** |
+
+The owner reported matches, not appearances. How paused differs from playing,
+or disabled from off, on this keyboard was not written down.
+
+The undo fields parse without complaint, so either the Undo button's light is
+not driven by `undo_state` or it needs something else as well. Open.
 
 ### Device → host: transport presses
 
