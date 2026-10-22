@@ -73,12 +73,17 @@ How it is wired:
 
 ## Known gaps
 
-Recorded at the milestone, before the owner's own list:
+Recorded at the milestone. The owner confirmed all of these and added the
+light guide and the 4-way control:
 
 - **Only note on/off reaches the plugin.** Mod wheel, pitch bend, sustain,
   aftertouch and other controllers are dropped. VST3 maps MIDI controllers to
   parameters through the controller's `IMidiMapping`, which is not wired yet.
 - **No light guide.** The keys' LEDs do not follow the plugin or the notes.
+- **The 4-way navigation control with its push-rotary dial is unmapped.**
+  Nothing it sends has been captured or decoded under ODR yet. The browser
+  actions KK knows (`browser_navigate_*`, `browser_load`, `quick_browse`)
+  are the likely vocabulary.
 - **The plugin's own GUI is never opened.** Edits the plugin makes itself
   (`performEdit`) are recorded but not shown on the keyboard.
 - **Fixed time context:** 120 BPM, 4/4, transport stopped. Tempo-synced
