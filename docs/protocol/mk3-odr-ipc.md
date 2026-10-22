@@ -683,3 +683,78 @@ gives no warnings to learn from.
 
 The same nesting rule likely explains `blocking_state` in notifications,
 which is reported missing and unexpected in the same call.
+
+## The host-model vocabulary (decompiled)
+
+**Evidence class: vendor binary.** Two sources, combined:
+
+1. **Field types**, from the template arguments of every
+   `match_dictionary_elements<…>` instantiation. The display models use a
+   second matcher family, `symbol_lookup_helper_with_registry` /
+   `…_without_registry::matcher_scalar<T>`: one keyed by registry id and one
+   by plain string.
+2. **Field names**, from a contiguous key-string pool near offset 6.34 MB of
+   the arm64 slice, in declaration order.
+
+### Parameters are typed
+
+| Kind (variant tag) | Value | Styles | Metadata |
+|---|---|---|---|
+| `continuous_parameter` | `continuous_parameter_value` | `knob`, `value` | — |
+| `continuous_bipolar_parameter` | `continuous_bipolar_parameter_value` | `knob`, `value` | — |
+| `discrete_parameter` | `discrete_parameter_value` | `value`, `menu`, `waveform`, `filtertype` | `discrete_parameter_metadata` |
+| `discrete_bipolar_parameter` | `discrete_bipolar_parameter_value` | `value` | `discrete_bipolar_parameter_metadata` |
+| `toggle_parameter` | `toggle_parameter_value` | `value`, `power`, `tempo_sync` | — |
+
+Fields: `parameter_value`, `parameter_style`, `parameter_metadata`; style
+sub-fields include `index`, `value_image`, `num_values`, `menu`, `image`.
+
+Device-drawn graphics are enumerated: filter types `hi_pass`,
+`resonant_hi_pass`, `lo_pass`, `resonant_lo_pass`, `band_pass`, `all_pass`,
+`bell`, `prop_q`, `band_shelf`, `analog_lo_shelf`, `analog_hi_shelf`,
+`baxandall_lo_shelf`, `baxandall_hi_shelf`, `comb`, `band_reject`; waveforms
+`sine`, `square`…`square_4`, `triangle`…`triangle_4`, `saw`…`saw_4`, `noise`,
+`pwm`, `wavetable`…`wavetable_4`, `complex`.
+
+### The NKS layout
+
+```text
+host_owned_viewstate:   { nks1_layout: [nks1_parameter_page],
+                          nks2_layout: { sections: [layout_section],
+                                         groups:   [layout_group] } }
+nks1_parameter_page:    { <name>, [optional<parameter_placement_info>; 8] }   one per knob
+device_owned_viewstate: { view_address: nks1_view_address | nks2_view_address,
+                          force_host_viewstate }
+view address fields:    group_index, section_index, parameter_index
+```
+
+Eight placement slots per page is NKS's eight-knob page, modelled directly.
+
+### Host state that likely drives the button LEDs
+
+`transport_section_state` with `transport` ∈ {`stopped`, `paused`,
+`playing`}, `recording`, `metro`, `loop`, `tap_tempo`, `count_in`, `armed`,
+`disabled`; `undo_state` with `can_undo`, `can_redo`; `quantize_state` with
+`can_quantize`, `can_quantize_half`; plus `tempo`, `current_preset_name`,
+`current_track_name`, `current_track_number`, `status_message`,
+`master_volume`.
+
+The hypothesis is that transport LEDs follow host-reported state rather than
+direct commands. Untested.
+
+### Other pages
+
+- **Mixer:** `track_infos`, `focused_track`, `selected_track_parameters`,
+  `current_parameter_page`, `number_of_parameter_pages`, and per track
+  `volume`, `volume_label`, `pan`, `pan_label`, `meter`, `mute`,
+  `mute_by_solo`, `solo`, `arm`, `automation`, `color`, `short_name`,
+  `selected`. Track types are `generic_track`, `midi`, `master`, `empty`.
+- **Browser:** `filters`, `sounds`, `items`, `selected_index(es)`,
+  `thumbnail_image`, `asset_image`, `is_favorite`, `is_user_saved`,
+  `prehear_enabled`, `quickbrowse_enabled`, `speak_preset_enabled`.
+- **Plugin chain:** `plugins`, `current_plugin_index`, `identifier`,
+  `can_bypass`, `bypass_enabled`, `can_remove`, `can_move_forward/backward`,
+  `supported_nks_version` ∈ {`non_nks`, `nks1`, `nks2`}.
+- **SmartPlay:** `arpeggiator`, `note_repeat` (`rate`, `swing`, `hold`,
+  `octaves`, `retrigger`, …), `scale_engine` (`scale`, `root_note`,
+  `chord_set`, `user_chord`, `harmonizer`, `key_mapping`).
