@@ -797,3 +797,34 @@ Six blind encodings failed first. Two decompiles settled it:
 The parameter's name is not a sibling of the kind tag. It is most likely
 carried by the NKS layout's per-knob placement, which matches how NKS
 separates parameter values from page layout.
+
+### The NKS1 layout (host observation + decompiled)
+
+```text
+host_owned_viewstate: {
+  nks1_layout: [                                   # pages
+    [                                              # a page IS a list of sections
+      { section_name: "Main",
+        parameters: [                              # up to 8 knob slots
+          { id: 0, name: "Cutoff" },               # references parameters[0]
+          nil,                                     # an empty knob slot
+        ] },
+    ],
+  ],
+  nks2_layout: nil,
+}
+```
+
+- **A page is an array of sections**, not a `{name, placements}` struct as
+  first read from the type list. `convert_scalar_struct_delegate
+  <nks1_parameter_page>` (`0x1002e59d8`) requires a msgpack array and converts
+  each element as a `layout_section`. That is a single-member struct encoded
+  as its member. It matches NKS on screen, where section headers span groups
+  of knobs.
+- **A section** requires `section_name`. Its placement list is the optional
+  field `parameters`. Offered alongside `placements`, `parameter_placements`,
+  `slots` and `controls`, it was the only one the agent did not flag as
+  unexpected.
+- **A placement** is `{id, name}`, both required. `nil` is accepted as an empty
+  slot.
+- `nks2_layout: nil` and `nks1_layout: []` are both valid.

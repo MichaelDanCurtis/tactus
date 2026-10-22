@@ -64,13 +64,26 @@ fn main() -> Result<(), OdrError> {
         cp(inner)
     };
     let st_nil = |tag: &str| Some(m(vec![(tag, Value::Nil)]));
+    let good_param = || with_style(st_nil("knob_parameter_style"));
+    let hov = |layout: Value| vec![("host_owned_viewstate", layout)];
+    let section = |fields: Vec<(&str, Value)>| {
+        hov(m(vec![("nks1_layout", Value::Array(vec![Value::Array(vec![m(fields)])])),
+                   ("nks2_layout", Value::Nil)]))
+    };
+    let empty = || Value::Array(vec![]);
     let variants: Vec<(&str, Vec<(&str, Value)>, Vec<(&str, Value)>)> = vec![
-        ("style = {knob_parameter_style: nil}", with_style(st_nil("knob_parameter_style")), vec![]),
-        ("style = {value_parameter_style: nil}", with_style(st_nil("value_parameter_style")), vec![]),
+        ("placement = {}", good_param(), section(vec![
+            ("section_name", s("Main")),
+            ("parameters", Value::Array(vec![m(vec![])])),
+        ])),
+        ("placement = nil (an empty knob slot)", good_param(), section(vec![
+            ("section_name", s("Main")),
+            ("parameters", Value::Array(vec![Value::Nil])),
+        ])),
     ];
     let base_missing = [
         "background", "parameters", "plugin_color", "nks_control_color",
-        "device_owned_viewstate", "host_owned_viewstate",
+        "device_owned_viewstate", "host_owned_viewstate", "parameter_style",
     ];
 
     for (label, inner, outer) in variants {
