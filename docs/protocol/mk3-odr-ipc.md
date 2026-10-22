@@ -249,6 +249,69 @@ written into `mk3-midi-mode.md`: read the source of truth first. Static
 analysis gave a definite answer in three queries after name-guessing had
 burned three rounds on a wrong lead.
 
+## Correction: argument order is (instance_uuid, serial, payload)
+
+Earlier sections of this document state display calls take
+`(serial, instance_uuid, payload)`. **That is backwards.**
+
+Two independent lines of evidence:
+
+- **Prior art.** A community thread documenting this same agent shows the
+  display call as `[uuid, serial, {...}]`, instance first. Its method ids also
+  match this project's registry exactly — 382 attach (`connect_device`), 373
+  focus (`client_request_focus`), 360 set LEDs (`client_lightguide_set_leds`) —
+  which independently corroborates the registry.
+- **This project's own log, re-aligned.** Anchoring on the one parse-error line
+  in the schema-probe run, the push that rendered on screen was the
+  `(instance, serial)` call, and it is the call with no `no such device` line.
+  The earlier attribution was off by one call because agent log lines lag the
+  sends.
+
+`no such device <our-instance-uuid>` is consistent with this: with the order
+reversed, the agent reads our instance uuid as the device.
+
+**Consequence:** every negative result in this document obtained with
+`(serial, instance)` order — including the Komplete Kontrol A/B — tested the
+wrong call and settles nothing.
+
+## What `instance_hello` actually parses (decompiled)
+
+The handler calls
+
+```text
+match_dictionary_elements<dictionary_unpack_error_strategy(2),
+    required_matcher<ni::odr::instance_info>,
+    required_matcher<semver::version>>
+```
+
+So the options dictionary has exactly two required fields: `client_info`,
+parsed as an `instance_info` struct, and `ipc_protocol_version`, parsed as a
+semver. The error strategy warns on unexpected keys rather than failing, which
+is why `is_host` is reported as unexpected yet tolerated.
+
+`type` is a field of `instance_info`. A missing `type` is a **warning only** —
+the push that rendered went out without it. Supplying it as a plain string
+(`"plugin"`, `"host"`, `"standalone"`, `"instance"`) makes the whole handshake
+fail to parse, so its encoding is something else; not yet determined, and not
+blocking.
+
+## Prior art
+
+- [tillt/KompleteSynthesia discussion #29](https://github.com/tillt/KompleteSynthesia/discussions/29)
+  — community notes on this agent's protocol: the 16-byte UUID prelude,
+  little-endian length framing, the call order `instance_hello` →
+  `connect_device` → `client_request_focus` → content, and that **focus lapses
+  after a short idle period** and needs re-asserting — a better explanation for
+  pushes stopping after ~17 s than the heartbeat theory, which tested negative.
+  Also documents images on the display via `add_asset` (32-byte SHA-256 handle
+  plus PNG/WebP bytes) and a parameter-page background, and that a malformed
+  handle aborts the agent — matching the crash seen here.
+- [terminar/rebellion](https://github.com/terminar/rebellion) — earlier work on
+  NI's IPC for Maschine MK3 and Komplete Kontrol MK2.
+
+Lesson repeated from `mk3-midi-mode.md`: this thread existed before most of
+this document was written.
+
 ## CONFIRMED: host content renders on the MK3 display
 
 **Evidence class: hardware observation, visually confirmed by the device's
