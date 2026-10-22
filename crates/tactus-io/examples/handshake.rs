@@ -40,8 +40,8 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use tactus_midi::daw::{cc, handshake};
 use tactus_io::{MidiIn, MidiOut, PortRole};
+use tactus_midi::daw::{cc, handshake};
 
 /// The device → host meaning of a channel-16 CC, from the vendor's script.
 ///
@@ -99,8 +99,10 @@ fn hex(bytes: &[u8]) -> String {
 fn render(bytes: &[u8]) -> String {
     let status = bytes.first().copied().unwrap_or(0);
     // 0xBF is a control change on channel 16 — the DAW-port control channel.
-    if status == 0xBF {
-        if let (Some(&number), Some(&value)) = (bytes.get(1), bytes.get(2)) {
+    if status == 0xBF
+        && let (Some(&number), Some(&value)) = (bytes.get(1), bytes.get(2))
+    {
+        {
             return format!(
                 "CC ch16 {number:#04X} = {value:<3}  {:<28} | {}",
                 cc_name(number),
@@ -198,10 +200,7 @@ fn main() {
     println!("baseline: {baseline} message(s) (expected 0)\n");
 
     // Phase 2 — the one message under test.
-    println!(
-        "== phase 2: sending HELLO {} ==",
-        hex(&handshake::HELLO)
-    );
+    println!("== phase 2: sending HELLO {} ==", hex(&handshake::HELLO));
     if let Err(e) = out.send_raw(&handshake::HELLO) {
         eprintln!("send failed: {e}");
         std::process::exit(1);
@@ -265,7 +264,10 @@ fn main() {
     let observed = a + b + c;
 
     // Phase 4 — always release the surface, whatever happened.
-    println!("\n== phase 4: releasing with GOODBYE {} ==", hex(&handshake::GOODBYE));
+    println!(
+        "\n== phase 4: releasing with GOODBYE {} ==",
+        hex(&handshake::GOODBYE)
+    );
     match out.send_raw(&handshake::GOODBYE) {
         Ok(()) => println!("released"),
         Err(e) => eprintln!("could not send GOODBYE: {e} — power cycle to be sure"),

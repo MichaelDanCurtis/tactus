@@ -1,0 +1,13 @@
+[package]
+name = "tactus-odr"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Client for Native Instruments' ODR agent, the host-mode channel for Kontrol MK3 hardware"
+
+[dependencies]
+rmpv = "1.3"
+thiserror = "2"
+
+[dev-dependencies]
