@@ -301,6 +301,104 @@ pub struct Knob<'a> {
 /// The most knobs one NKS1 section can place.
 pub const KNOBS_PER_SECTION: usize = 8;
 
+/// Transport position, as the device shows it on the Play/Stop buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    /// `stopped`.
+    Stopped,
+    /// `paused`.
+    Paused,
+    /// `playing`.
+    Playing,
+}
+
+/// Record button state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Record {
+    /// `off`.
+    Off,
+    /// `armed`.
+    Armed,
+    /// `recording`.
+    Recording,
+}
+
+/// The three-way state of a toggle button's LED: not available, available but
+/// inactive, or active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    /// `disabled` — the function is not available.
+    Disabled,
+    /// `off` — available, inactive.
+    Off,
+    /// `on` — active.
+    On,
+}
+
+impl Transport {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Paused => "paused",
+            Self::Playing => "playing",
+        }
+    }
+}
+impl Record {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Armed => "armed",
+            Self::Recording => "recording",
+        }
+    }
+}
+impl Control {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Off => "off",
+            Self::On => "on",
+        }
+    }
+}
+
+/// What the host reports about itself: transport, undo/quantize availability,
+/// and the names shown on screen.
+///
+/// The enum spellings were read from the agent's own lookup tables
+/// (`lookup_enum_from_string<transport_state | record_state |
+/// control_state>`), not guessed.
+#[derive(Debug, Clone, Copy)]
+pub struct HostState<'a> {
+    /// Transport position.
+    pub transport: Transport,
+    /// Record state.
+    pub record: Record,
+    /// Metronome.
+    pub metro: Control,
+    /// Loop.
+    pub loop_: Control,
+    /// Tap tempo.
+    pub tap_tempo: Control,
+    /// Count-in.
+    pub count_in: Control,
+    /// Whether undo is available.
+    pub can_undo: bool,
+    /// Whether redo is available.
+    pub can_redo: bool,
+    /// Whether quantize is available.
+    pub can_quantize: bool,
+    /// Whether half-quantize is available.
+    pub can_quantize_half: bool,
+    /// Tempo in BPM.
+    pub tempo: f64,
+    /// Track name.
+    pub track_name: &'a str,
+    /// Preset name.
+    pub preset_name: &'a str,
+}
+
 /// A connected ODR client.
 #[derive(Debug)]
 pub struct Client {
@@ -732,6 +830,51 @@ impl Client {
         )]);
         let args = self.device_args(serial, vec![Value::from(id), tagged]);
         self.notify_symbol("client_parameter_page_set_parameter_value", args)
+    }
+
+    /// Report host state: transport, undo/quantize availability, names.
+    ///
+    /// This is what lights the transport buttons. The device does not keep
+    /// its own transport; it shows whatever the host reports.
+    pub fn set_host_state(&mut self, serial: &str, st: &HostState<'_>) -> Result<(), OdrError> {
+        let s = |t: &str| Value::String(t.into());
+        let map = |pairs: Vec<(&str, Value)>| {
+            Value::Map(pairs.into_iter().map(|(k, v)| (s(k), v)).collect())
+        };
+        let body = map(vec![
+            (
+                "transport_section_state",
+                map(vec![
+                    ("transport", s(st.transport.wire())),
+                    ("recording", s(st.record.wire())),
+                    ("metro", s(st.metro.wire())),
+                    ("loop", s(st.loop_.wire())),
+                    ("tap_tempo", s(st.tap_tempo.wire())),
+                    ("count_in", s(st.count_in.wire())),
+                ]),
+            ),
+            (
+                "undo_state",
+                map(vec![
+                    ("can_undo", Value::Boolean(st.can_undo)),
+                    ("can_redo", Value::Boolean(st.can_redo)),
+                ]),
+            ),
+            (
+                "quantize_state",
+                map(vec![
+                    ("can_quantize", Value::Boolean(st.can_quantize)),
+                    ("can_quantize_half", Value::Boolean(st.can_quantize_half)),
+                ]),
+            ),
+            ("smartplay_enabled", Value::Boolean(false)),
+            ("browser_enabled", Value::Boolean(true)),
+            ("tempo", Value::F64(st.tempo)),
+            ("current_track_name", s(st.track_name)),
+            ("current_preset_name", s(st.preset_name)),
+        ]);
+        let args = self.device_args(serial, vec![body]);
+        self.notify_symbol("client_set_host_owned_instance_client_state", args)
     }
 
     /// `[instance_uuid, serial, extra...]` — the order every device call uses.

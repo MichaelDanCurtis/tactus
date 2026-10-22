@@ -885,3 +885,59 @@ client_parameter_page_set_data(instance, serial, {
 ```
 
 The agent logs no warnings for it.
+
+## Transport: state out, presses in
+
+### Host → device: `client_set_host_owned_instance_client_state`
+
+Three arguments, `(instance, serial, state)`, from the agent's arity error. The
+state, with field names from the agent's warnings and types from the parser's
+template arguments:
+
+```text
+{
+  transport_section_state: {
+    transport:  transport_state      stopped | paused | playing        (required)
+    recording:  record_state         off | armed | recording           (required)
+    metro, loop, tap_tempo, count_in:
+                control_state        disabled | off | on               (optional)
+  },
+  undo_state:     { can_undo: bool, can_redo: bool },
+  quantize_state: { can_quantize: bool, can_quantize_half: bool },
+  smartplay_enabled: bool,                                              (required)
+  browser_enabled:   bool,                                              (required)
+  tempo: float, master_volume: dBFS float, current_track_number: uint,
+  current_track_name, current_preset_name, status_message,
+  dawcontrol_plugin_identifier, active_keyswitch: string                (optional)
+}
+```
+
+The enum spellings were read from the agent's own sorted lookup tables
+(`lookup_enum_from_string<transport_state|record_state|control_state>`, three
+entries each, table pointers decoded from the chained-fixup low bits). They
+were not guessed. Undo and quantize flags are booleans: the `control_state`
+string form is fatal.
+
+`control_state` is the three-way button LED: `disabled` (not available), `off`
+(available, inactive), `on` (active).
+
+The owner observed the transport lights changing while this state was
+stepped. A per-step breakdown is pending.
+
+### Device → host: transport presses
+
+Through the same `plugin_action` channel as knobs and browser controls, as
+`{daw_<action>: nil}`:
+
+| Button | Action |
+|---|---|
+| Play | `daw_play` |
+| Stop | `daw_stop` |
+| Record | `daw_record` |
+| Loop | `daw_loop` |
+| Metronome | `daw_metro` |
+
+The registry also defines `daw_restart`, `daw_count_in`, `daw_undo`,
+`daw_redo`, `daw_quantize`, `daw_quantize_half`, `daw_tap_tempo`,
+`daw_set_tempo`. None were observed yet, and some may need Shift on this
+keyboard.
