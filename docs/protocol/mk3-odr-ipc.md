@@ -126,7 +126,110 @@ particular configuration rather than the hardware's capability.
 `get_device_properties(serial, client_name)` returns `{}`. Not an error —
 there is simply nothing there without a device session.
 
-## The open question: where the display API lives
+## The connection opens with a raw 16-byte UUID
+
+**Evidence class: host observation.** Before any framing, a client writes
+**16 raw bytes**: its connection UUID. Only then do length-prefixed msgpack
+frames begin.
+
+This was found by accident and is worth recording as a method. Sending frames
+without the prelude made the agent log
+
+```text
+rpc_server::remove_connection: 38000000-9302-ae69-6e73-74616e63655f
+```
+
+Those are *our own bytes* rendered as a UUID — `38 00 00 00` is the 56-byte
+length prefix, `93 02` the msgpack `[2, …`, `ae` a 14-character string header,
+then `instance_` . The agent had consumed our first 16 bytes as the connection
+id. Sending a real UUID first makes it report that UUID back correctly.
+
+**This also explains the "first request is consumed" behaviour** recorded
+earlier in this document: nothing was consuming a request. The first 16 bytes
+of the first frame were being taken as the connection id, corrupting that one
+frame and leaving the rest of the stream aligned. One cause, two symptoms.
+
+## The method surface depends on the connection's role
+
+The six methods listed above are what an **unidentified** connection gets.
+Once `instance_hello` succeeds the agent registers the client surface, which
+its own log enumerates:
+
+```text
+add_asset
+client_browser_set_data_model      client_browser_set_filter
+client_browser_set_filter_selection client_browser_set_filters
+client_browser_set_settings        client_browser_set_sound_item
+client_browser_set_sound_selection client_browser_set_sounds
+client_lightguide_set_leds         client_metro_flash
+client_mixer_set_meters            client_mixer_set_track_data
+client_mixer_set_trackinfo
+client_parameter_page_set_data     client_parameter_page_set_plugin_data
+client_parameter_page_set_parameter_value
+client_parameter_page_set_device_owned_viewstate
+client_parameter_page_set_host_owned_viewstate
+client_plugin_chain_set_data       client_plugin_chain_set_index
+client_request_focus               client_release_focus
+client_set_host_owned_instance_client_state
+client_set_page
+client_smartplay_set_data          client_smartplay_set_device_owned_viewstate
+instance_goodbye                   run_self_test
+send_client_notification           send_global_notification
+set_device_settings
+```
+
+**That is the display API, and it is reachable from this socket** — the
+earlier conclusion that it was not reachable here was wrong, and is retracted.
+`client_set_page` plus one `client_*_set_*` call is the path to putting
+content on screen; `send_global_notification` is the smallest possible
+"hello world".
+
+## The agent's log is the feedback channel
+
+`~/Library/Logs/Native Instruments/NIHardwareConnectionService.log`, at trace
+level, is what makes this protocol tractable at all. It reports:
+
+| Log line | Meaning |
+|---|---|
+| `rpc_server::start_async_accept: connection established` | connection accepted |
+| `rpc_server::remove_connection: <uuid>` | the connection id it parsed from the prelude |
+| `IPC: instance_hello - <uuid>, client version 2.2.0, server version 2.1.0` | handshake accepted |
+| `msgpack_rpc::handle_notify - method not registered (X)` | X is not valid for this connection's role |
+| `msgpack_rpc::handle_notify - available methods …` | the full valid set, free of charge |
+| `match_dictionary_elements: unexpected key found: "K"` | K is not a known key of that argument |
+| `Arguments cannot be parsed: […]` | arity or types wrong, echoed back verbatim |
+
+The distinction between the last two is what makes argument discovery
+possible: *unexpected key* means the dictionary was reached, so arity is
+right; *cannot be parsed* without any key warning means it failed earlier.
+
+## `instance_hello` — partly solved, and the remaining gap
+
+Established by probing against the log:
+
+- **Form:** a **request**, not a notification. As a notification it is "not
+  registered".
+- **Method name is a string**, `"instance_hello"` — the IPC side has no
+  registry exchange, unlike the device side.
+- **Arity 2:** `(uuid, options_map)`. Both a 36-character string and 16 raw
+  bytes get far enough for the map to be matched, so the map is argument two.
+- **`ipc_protocol_version` is a real key.** Of 45 candidate key names probed,
+  it is the *only* one the agent did not flag as unexpected.
+- Unexpected keys do **not** block success: the real client sends `is_host`,
+  which the agent flags, and its handshake still succeeds.
+
+**Not yet solved:** at least one more required key, whose name was not among
+the 45 tried, and whose absence yields `Arguments cannot be parsed` with no
+key warning. Six value encodings for `ipc_protocol_version` were also tried —
+`"2.2.0"`, `"2.1.0"`, `[2,2,0]`, `[2,1,0]`, `{major,minor,patch}`, `2` — and
+all failed, so the gap is a missing key rather than a wrong value.
+
+**Stop guessing here.** Name-guessing cost three rounds for one key. The
+reliable route is to read the handler: find the `match_dictionary_elements`
+call site for `instance_hello` and the key list it is given. That is static
+analysis with a definite answer, against an unbounded search over names.
+
+## Superseded: where the display API lives
 
 `connect_device(serial, client_name)` returns **`false`**, with Komplete
 Kontrol running *and* with it quit. Until that returns true there is no device
