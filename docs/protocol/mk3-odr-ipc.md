@@ -272,9 +272,13 @@ The call that did it:
 preceded on the same connection by the 16-byte UUID prelude,
 `instance_hello`, and `client_request_focus(serial, instance_uuid)`.
 
-**Komplete Kontrol was closed.** Only NI's background agent was in the path,
-which is the result this project needs: the display is drivable without the
-vendor's application.
+**Whether Komplete Kontrol was running at the moment of the write is
+UNKNOWN.** The owner had closed it and *subsequently* noticed the text on
+screen, which does not establish the state at write time — a notification
+drawn while KK was still up could simply have persisted. Deciding this needs a
+run with KK confirmed closed beforehand, and it matters: "the display is
+drivable without the vendor's application" is the claim this whole program
+rests on, and it is **not yet evidenced**.
 
 ### A retraction of the retraction
 
