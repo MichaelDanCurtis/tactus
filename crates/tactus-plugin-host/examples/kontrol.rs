@@ -30,7 +30,6 @@ use tactus_plugin_host::{
     pump_main_run_loop,
 };
 
-const SERIAL: &str = "99FE7169";
 const BLOCK: usize = 512;
 /// Light-guide colour byte for a held key (confirmed: green).
 const HELD: u8 = 0x1C;
@@ -82,6 +81,7 @@ fn load(plugin: &mut Plugin<'_>, clock: &mut Clock, preset: &Preset) -> Result<f
 /// Publish the preset's pages with the plugin's values and text.
 fn publish(
     client: &mut Client,
+    serial: &str,
     plugin: &Plugin<'_>,
     preset: &Preset,
 ) -> Result<Vec<String>, String> {
@@ -135,7 +135,7 @@ fn publish(
     let name = preset.plugin.name.clone().unwrap_or(product);
     client
         .publish_parameter_page(
-            SERIAL,
+            serial,
             &ParameterPage {
                 plugin_name: &name,
                 pages: &layout,
@@ -319,12 +319,20 @@ fn main() -> Result<(), String> {
     client
         .instance_hello("tactus-kontrol", "0.1.0")
         .map_err(e)?;
-    client.connect_device(SERIAL).map_err(e)?;
-    client.request_focus(SERIAL).map_err(e)?;
+    let device = client
+        .devices()
+        .map_err(e)?
+        .into_iter()
+        .next()
+        .ok_or("no keyboard connected")?;
+    println!("keyboard: {} {}", device.product, device.serial);
+    let serial = device.serial.as_str();
+    client.connect_device(serial).map_err(e)?;
+    client.request_focus(serial).map_err(e)?;
     if let Some(page) = client.registry().id("parameter") {
-        client.set_page(SERIAL, page).map_err(e)?;
+        client.set_page(serial, page).map_err(e)?;
     }
-    let mut headers = publish(&mut client, &plugin, &preset)?;
+    let mut headers = publish(&mut client, serial, &plugin, &preset)?;
     println!("on screen. Knobs set the plugin; page and preset buttons work — {seconds}s.");
 
     let start = Instant::now();
@@ -346,7 +354,7 @@ fn main() -> Result<(), String> {
             let leds: Vec<(u8, u8)> = (0u8..128)
                 .map(|n| (n, if held[usize::from(n)] { HELD } else { 0 }))
                 .collect();
-            client.set_leds(SERIAL, &leds).map_err(e)?;
+            client.set_leds(serial, &leds).map_err(e)?;
         }
         for n in client.listen(Duration::from_millis(5)).map_err(e)? {
             for event in events::decode(client.registry(), &n) {
@@ -358,7 +366,7 @@ fn main() -> Result<(), String> {
                             let _ = tx.try_send(Input::Param { id, value: v });
                             let text = plugin.display(id, v).unwrap_or_default();
                             client
-                                .set_parameter_value(SERIAL, id, v, &text)
+                                .set_parameter_value(serial, id, v, &text)
                                 .map_err(e)?;
                             if turned.insert(id) {
                                 println!("{} knob {id} turned: now {text}", stamp(start));
@@ -391,7 +399,7 @@ fn main() -> Result<(), String> {
                                         );
                                         path = p;
                                         preset = np;
-                                        headers = publish(&mut client, &plugin, &preset)?;
+                                        headers = publish(&mut client, serial, &plugin, &preset)?;
                                         if let Ok(mut m) = midi_map.lock() {
                                             *m = plugin.midi_map();
                                         }
@@ -417,10 +425,10 @@ fn main() -> Result<(), String> {
         }
         // The plugin can change its own values; show them when it says so.
         if plugin.take_restart_flags() & PARAM_VALUES_CHANGED != 0 {
-            headers = publish(&mut client, &plugin, &preset)?;
+            headers = publish(&mut client, serial, &plugin, &preset)?;
         }
         if last_focus.elapsed() >= Duration::from_secs(1) {
-            client.request_focus(SERIAL).map_err(e)?;
+            client.request_focus(serial).map_err(e)?;
             pump_main_run_loop(Duration::from_millis(1));
             last_focus = Instant::now();
         }

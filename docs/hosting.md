@@ -83,10 +83,11 @@ preset almost at once, and the signal means the values are in place.
 Recorded at the milestone. The owner confirmed all of these and added the
 light guide and the 4-way control:
 
-- **Only note on/off reaches the plugin.** Mod wheel, pitch bend, sustain,
-  aftertouch and other controllers are dropped. VST3 maps MIDI controllers to
-  parameters through the controller's `IMidiMapping`, which is not wired yet.
-- **No light guide.** The keys' LEDs do not follow the plugin or the notes.
+- ~~Only note on/off reaches the plugin.~~ Done: CCs, channel and poly
+  pressure and pitch bend go through the plugin's `IMidiMapping`. **Awaits a
+  hardware check.**
+- **Light guide:** held keys now light green. **Awaits a hardware check.**
+  Following the plugin's key zones (keyswitches, splits) is not done.
 - **The 4-way navigation control with its push-rotary dial is unmapped.**
   Nothing it sends has been captured or decoded under ODR yet. The browser
   actions KK knows (`browser_navigate_*`, `browser_load`, `quick_browse`)
@@ -98,4 +99,5 @@ light guide and the 4-way control:
 - **One plugin, VST3 only, Apple Silicon only.** No AU, no VST2. Intel-only
   bundles (Super 8) do not load. Only presets that name a VST3 class load.
 - **Default output device only, f32 only,** and no device choice.
-- **Serial hard-coded** in the examples.
+- **One audio underrun at start-up** was logged while the plugin loaded,
+  with the 256-frame buffer. Not heard as a problem; watch for it.

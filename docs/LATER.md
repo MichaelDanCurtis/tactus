@@ -26,8 +26,9 @@ where the evidence is. Larger work lives in `PROGRAM.md`.
   `set_host_pad_mode` and five more. KK 3.5.4 knows them; agent 2.0.7, the
   latest, does not register them. Probably for Maschine or other hardware.
   Revisit with that hardware. `kk-client.md`.
-- **Hard-coded serial.** Every example uses `99FE7169`. Discover devices with
-  `get_devices` instead.
+- **Hard-coded serial** in the older examples. `Client::devices()` now
+  discovers the keyboard, and `tactus-plugin-host`'s `kontrol` uses it; the
+  ODR probes and tests still hard-code `99FE7169`.
 - **Arc colours by eye.** Super 8 R2 (`#FC6949`) and Massive X (`#E17600`)
   both look orange. A visual check across products needs a pair that clearly
   differs (FM8 `#EBE9EA` against Super 8 `#24B0E8`, say). The mechanism itself

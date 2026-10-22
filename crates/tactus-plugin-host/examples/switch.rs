@@ -51,7 +51,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}: signal after {t:?}", a.info.name);
     run_for(&mut plugin, Duration::from_secs(2));
 
-    let knobs: Vec<_> = b.pages.iter().flat_map(|p| p.slots.iter().flatten()).collect();
+    let knobs: Vec<_> = b
+        .pages
+        .iter()
+        .flat_map(|p| p.slots.iter().flatten())
+        .collect();
     plugin.take_restart_flags();
     plugin.load_state(&b.plugin_state)?;
     let t = wait_for_signal(&mut plugin, Duration::from_secs(5));

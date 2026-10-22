@@ -302,6 +302,44 @@ pub struct Knob<'a> {
     pub display: &'a str,
 }
 
+/// A keyboard the agent knows about, from `get_devices`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceInfo {
+    /// Serial number: the id every device call takes.
+    pub serial: String,
+    /// Product name, e.g. `KONTROL S88 MK3`.
+    pub product: String,
+    /// USB product id (`0x2120` for the S88 MK3).
+    pub product_id: u32,
+    /// Firmware version number.
+    pub version: u32,
+}
+
+impl DeviceInfo {
+    fn from_value(v: &Value) -> Option<Self> {
+        let Value::Map(m) = v else {
+            return None;
+        };
+        let get = |k: &str| {
+            m.iter()
+                .find(|(key, _)| key.as_str() == Some(k))
+                .map(|(_, v)| v)
+        };
+        let text = |k: &str| get(k).and_then(Value::as_str).map(str::to_owned);
+        let num = |k: &str| {
+            get(k)
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+        };
+        Some(Self {
+            serial: text("serialnumber")?,
+            product: text("product").unwrap_or_default(),
+            product_id: num("productID").unwrap_or(0),
+            version: num("versionNumber").unwrap_or(0),
+        })
+    }
+}
+
 /// How long one socket read waits for the agent by default.
 const READ_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -748,6 +786,17 @@ impl Client {
     /// This connection's instance id, which every device call carries first.
     pub fn instance_id(&self) -> &str {
         &self.instance_id
+    }
+
+    /// Every keyboard the agent knows about. A host connects to one of these
+    /// by its [`DeviceInfo::serial`] instead of hard-coding a serial.
+    pub fn devices(&mut self) -> Result<Vec<DeviceInfo>, OdrError> {
+        let reply = self.call("get_devices", vec![], Duration::from_secs(3))?;
+        let reply = self.registry.humanise(&reply);
+        Ok(match reply {
+            Value::Array(items) => items.iter().filter_map(DeviceInfo::from_value).collect(),
+            _ => Vec::new(),
+        })
     }
 
     /// Attach a device to this instance.
