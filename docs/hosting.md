@@ -71,6 +71,13 @@ How it is wired:
   whatever window it was asked for, so notes lagged by up to a quarter of a
   second. Both are fixed.
 
+## Preset switches are fast, and the signal is honest
+
+`examples/switch.rs`: after Wob Wolfer (signal at 1.43 s, cold), switching to
+Agonic Drone signalled `kParamValuesChanged` after **11 ms**. **0 of 20** knob
+values moved in the two seconds after the signal. A warm engine applies a
+preset almost at once, and the signal means the values are in place.
+
 ## Known gaps
 
 Recorded at the milestone. The owner confirmed all of these and added the
@@ -88,10 +95,6 @@ light guide and the 4-way control:
   (`performEdit`) are recorded but not shown on the keyboard.
 - **Fixed time context:** 120 BPM, 4/4, transport stopped. Tempo-synced
   patches cannot follow a host clock.
-- **Preset changes after the first report "loaded" in ~10 ms.** With the
-  device driving the engine the plugin may genuinely be that fast, or it may
-  signal before its values settle. Check that the screen shows the new
-  preset's values.
 - **One plugin, VST3 only, Apple Silicon only.** No AU, no VST2. Intel-only
   bundles (Super 8) do not load. Only presets that name a VST3 class load.
 - **Default output device only, f32 only,** and no device choice.
