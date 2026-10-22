@@ -49,20 +49,28 @@ fn main() -> Result<(), OdrError> {
     let m = |pairs: Vec<(&str, Value)>| {
         Value::Map(pairs.into_iter().map(|(k, v)| (Value::String(k.into()), v)).collect())
     };
+    let u = |n: u32| Value::from(n);
+    let one = |id: Value, entry: Value| Value::Map(vec![(id, entry)]);
     // (label, extra fields inside plugin_data, extra fields beside it)
+    let cp = |inner: Vec<(&str, Value)>| {
+        vec![("parameters", one(u(0), m(vec![("continuous_parameter", m(inner))])))]
+    };
+    let pv = || m(vec![("value", Value::F64(0.5)), ("display_value", s("50%"))]);
+    let with_style = |style: Option<Value>| {
+        let mut inner = vec![("parameter_value", pv())];
+        if let Some(st) = style {
+            inner.push(("parameter_style", st));
+        }
+        cp(inner)
+    };
+    let st = |tag: &str, fields: Vec<(&str, Value)>| Some(m(vec![(tag, m(fields))]));
     let variants: Vec<(&str, Vec<(&str, Value)>, Vec<(&str, Value)>)> = vec![
-        ("parameters = {0: {}}", vec![("parameters",
-            Value::Map(vec![(Value::from(0u32), Value::Map(vec![]))]))], vec![]),
-        ("parameters = {\"p0\": {}}", vec![("parameters",
-            m(vec![("p0", Value::Map(vec![]))]))], vec![]),
-        ("plugin_color = nil", vec![("plugin_color", Value::Nil)], vec![]),
-        ("plugin_color = 0.5", vec![("plugin_color", Value::F64(0.5))], vec![]),
-        ("plugin_color = [0,0,255]", vec![("plugin_color",
-            Value::Array(vec![Value::from(0u32), Value::from(0u32), Value::from(255u32)]))], vec![]),
-        ("plugin_color = {r,g,b}", vec![("plugin_color",
-            m(vec![("r", Value::from(0u32)), ("g", Value::from(0u32)), ("b", Value::from(255u32))]))], vec![]),
-        ("outer device_owned_viewstate {}", vec![], vec![("device_owned_viewstate", Value::Map(vec![]))]),
-        ("outer host_owned_viewstate {}", vec![], vec![("host_owned_viewstate", Value::Map(vec![]))]),
+        ("{value_parameter_style: {index: 0}}", with_style(st("value_parameter_style", vec![("index", u(0))])), vec![]),
+        ("{value_parameter_style: {value_image: nil}}", with_style(st("value_parameter_style", vec![("value_image", Value::Nil)])), vec![]),
+        ("{knob_parameter_style: {index: 0}}", with_style(st("knob_parameter_style", vec![("index", u(0))])), vec![]),
+        ("{knob: {}}", with_style(st("knob", vec![])), vec![]),
+        ("{value: {}}", with_style(st("value", vec![])), vec![]),
+        ("{knob_parameter: {}}", with_style(st("knob_parameter", vec![])), vec![]),
     ];
     let base_missing = [
         "background", "parameters", "plugin_color", "nks_control_color",

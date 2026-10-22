@@ -758,3 +758,34 @@ direct commands. Untested.
 - **SmartPlay:** `arpeggiator`, `note_repeat` (`rate`, `swing`, `hold`,
   `octaves`, `retrigger`, …), `scale_engine` (`scale`, `root_note`,
   `chord_set`, `user_chord`, `harmonizer`, `key_mapping`).
+
+### The parameter entry (host observation)
+
+Recovered field by field with `examples/page_probe.rs`:
+
+```text
+parameters: {
+  <integer parameter id>: {          # string ids are fatal
+    continuous_parameter: {          # exactly one key: the kind tag. A sibling
+                                     # key such as "name" is fatal.
+      parameter_value: { value: 0.5, display_value: "50%" },   # confirmed
+      parameter_style: <variant>,    # encoding NOT YET KNOWN
+    }
+  }
+}
+```
+
+`toggle_parameter` parses with the same two required fields.
+
+`parameter_style` is `variant<knob_parameter_style, value_parameter_style>`
+for a continuous parameter. Every encoding tried is fatal: an empty map, a map
+keyed by `knob_parameter_style` / `value_parameter_style` (empty or with
+`index` / `value_image`), short tags `knob` / `value`, the bare tag as a
+string, a `[tag, {}]` array, an index, and `nil`.
+
+**Stop guessing here.** The variant has its own converter. Decompiling it,
+rather than continuing the sweep, is the next step.
+
+The parameter's name is not a sibling of the kind tag. It is most likely
+carried by the NKS layout's per-knob placement, which matches how NKS
+separates parameter values from page layout.
