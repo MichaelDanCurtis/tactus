@@ -1,0 +1,18 @@
+[package]
+name = "tactus-plugin-host"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Loads VST3 instrument plugins in-process: state, parameters, and later audio"
+
+[dependencies]
+vst3 = "0.3"
+libloading = "0.8"
+thiserror = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
+[dev-dependencies]
+tactus-nks = { path = "../tactus-nks" }

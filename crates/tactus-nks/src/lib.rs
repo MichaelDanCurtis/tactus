@@ -6,8 +6,8 @@
 //! reads exactly those three things.
 //!
 //! It deliberately does **not** interpret the plugin's own state. That chunk
-//! (`PCHK`) is an opaque blob handed back to the plugin when it loads; only its
-//! length is recorded here.
+//! (`PCHK`) is an opaque blob: it is carried as bytes, to be handed back to the
+//! plugin when it loads, and nothing here looks inside it.
 //!
 //! # Container
 //!
@@ -203,8 +203,11 @@ pub struct Preset {
     pub plugin: PluginId,
     /// Knob pages. Empty when the preset defines none.
     pub pages: Vec<Page>,
-    /// Size of the opaque plugin state, in bytes. Never interpreted.
+    /// Size of the opaque plugin state, in bytes.
     pub state_len: usize,
+    /// The plugin's own saved state, the `PCHK` body after its version word.
+    /// Opaque: only the plugin reads it.
+    pub plugin_state: Vec<u8>,
 }
 
 impl Preset {
@@ -238,7 +241,7 @@ impl Preset {
         let mut info = None;
         let mut plugin = None;
         let mut pages = Vec::new();
-        let mut state_len = 0;
+        let mut plugin_state = Vec::new();
 
         let mut off = 12;
         while off + 8 <= end {
@@ -259,7 +262,7 @@ impl Preset {
                 b"NISI" => info = Some(parse_info(&chunk_value("NISI", body)?)?),
                 b"NICA" => pages = parse_pages(&chunk_value("NICA", body)?)?,
                 b"PLID" => plugin = Some(parse_plugin(&chunk_value("PLID", body)?)?),
-                b"PCHK" => state_len = len.saturating_sub(4),
+                b"PCHK" => plugin_state = body.get(4..).unwrap_or_default().to_vec(),
                 _ => {}
             }
             off = start + len + (len & 1);
@@ -269,7 +272,8 @@ impl Preset {
             info: info.ok_or(NksError::Missing("NISI"))?,
             plugin: plugin.ok_or(NksError::Missing("PLID"))?,
             pages,
-            state_len,
+            state_len: plugin_state.len(),
+            plugin_state,
         })
     }
 }
@@ -539,10 +543,11 @@ mod tests {
     }
 
     #[test]
-    fn plugin_state_is_measured_never_decoded() {
+    fn plugin_state_is_carried_as_bytes_never_decoded() {
         // A five-entry map cut off after one key; decoding PCHK would fail.
         let p = Preset::parse(&preset(vec![page()])).unwrap();
         assert_eq!(p.state_len, 3);
+        assert_eq!(p.plugin_state, [0x85, 0xa1, 0x78]);
     }
 
     #[test]
