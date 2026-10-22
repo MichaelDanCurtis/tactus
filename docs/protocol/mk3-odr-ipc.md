@@ -644,3 +644,42 @@ now resolves keys only.
 that `plugin_parameter_value_change` only reports for parameters that exist,
 and the parameter page currently shows "no instrument loaded"; publishing a
 parameter page first should make knob turns report.
+
+## Display: the parameter-page schema
+
+**Evidence class: host observation**, recovered from the agent's own
+`expected key missing` / `unexpected key found` warnings and fatal parse
+errors, one field at a time (`examples/page_probe.rs`).
+
+```text
+client_parameter_page_set_data(instance_uuid, serial, {
+  plugin_data: {
+    name:              string
+    background:        nil accepted          (an image handle; see add_asset)
+    parameters:        map                   (entry format: not yet known)
+    plugin_color:      {r, g, b}             (nil also accepted)
+    nks_control_color: colour                (by analogy with plugin_color; untested)
+  },
+  device_owned_viewstate: { view_address, force_host_viewstate },
+  host_owned_viewstate:   { nks1_layout, nks2_layout },
+})
+```
+
+How each was established:
+
+| Field | Evidence |
+|---|---|
+| `parameters` is a map | `{}` accepted; `[]` and `[{}]` fatal |
+| colour is `{r,g,b}` | `{r,g,b}` accepted with no unexpected keys; `0`, `0.5`, `"blue"`, `[0,0,255]` all fatal |
+| viewstates sit **beside** `plugin_data` | inside it they are reported both missing and unexpected; beside it they are accepted, and the agent names their own fields |
+
+**`nks1_layout` / `nks2_layout`** are part of the host-owned viewstate. The NKS
+knob-page layout is therefore a first-class field of the parameter page, and
+showing an NKS plugin on the keyboard comes down to populating these.
+
+**Still open:** the parameter entry. `{0: {}}` and `{"p0": {}}` are both fatal,
+so either the key type or the entry's own shape is wrong, and an empty entry
+gives no warnings to learn from.
+
+The same nesting rule likely explains `blocking_state` in notifications,
+which is reported missing and unexpected in the same call.
