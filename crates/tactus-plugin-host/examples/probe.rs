@@ -154,6 +154,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    if std::env::var_os("PROBE_NOTE").is_some() {
+        // Hold middle C for a second, then release, and measure the output.
+        let audio = plugin.audio().ok_or("engine not started")?;
+        let mut block = vec![0.0f32; 512 * 2];
+        let mut held = 0.0f32;
+        let mut tail = 0.0f32;
+        for i in 0..188 {
+            let input = match i {
+                0 => vec![tactus_plugin_host::Input::NoteOn {
+                    pitch: 60,
+                    velocity: 100,
+                }],
+                94 => vec![tactus_plugin_host::Input::NoteOff {
+                    pitch: 60,
+                    velocity: 64,
+                }],
+                _ => vec![],
+            };
+            let peak = audio.render(&mut block, 2, &input)?;
+            if i < 94 {
+                held = held.max(peak)
+            } else {
+                tail = tail.max(peak)
+            }
+        }
+        println!("note    middle C held 1 s: peak {held:.4}; after release: peak {tail:.4}");
+    }
     let saved = plugin.save_state()?;
     println!(
         "getState gives {} bytes (preset had {}); identical: {}\n",

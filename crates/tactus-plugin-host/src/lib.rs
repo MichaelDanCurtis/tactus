@@ -19,9 +19,12 @@
 mod com;
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use vst3::Steinberg::Vst::BusDirections_::{kInput, kOutput};
+use vst3::Steinberg::Vst::Event_::EventFlags_::kIsLive;
+use vst3::Steinberg::Vst::Event_::EventTypes_::{kNoteOffEvent, kNoteOnEvent};
 use vst3::Steinberg::Vst::MediaTypes_::{kAudio, kEvent};
 use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_::kTempoValid;
 use vst3::Steinberg::Vst::ProcessModes_::kRealtime;
@@ -304,7 +307,7 @@ pub struct Plugin<'m> {
     points: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
     _host: ComWrapper<com::Host>,
     handler: ComWrapper<com::ComponentHandler>,
-    engine: Option<Engine>,
+    engine: Option<Arc<Mutex<Engine>>>,
 }
 
 /// `restartComponent` flag: parameter values changed, re-read them.
@@ -315,9 +318,236 @@ struct Engine {
     processor: ComPtr<IAudioProcessor>,
     sample_rate: f64,
     max_block: usize,
+    active: bool,
     /// One buffer set per input bus, then per output bus: channels of samples.
     inputs: Vec<Vec<Vec<f32>>>,
     outputs: Vec<Vec<Vec<f32>>>,
+    events: ComWrapper<com::EventList>,
+    events_ptr: ComPtr<IEventList>,
+    changes: ComWrapper<com::ParameterChanges>,
+    changes_ptr: ComPtr<IParameterChanges>,
+}
+
+/// Something for the audio engine to act on in the next block.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Input {
+    /// A key went down. Velocity 1-127.
+    NoteOn {
+        /// MIDI note number.
+        pitch: u8,
+        /// MIDI velocity.
+        velocity: u8,
+    },
+    /// A key came up.
+    NoteOff {
+        /// MIDI note number.
+        pitch: u8,
+        /// MIDI release velocity.
+        velocity: u8,
+    },
+    /// A parameter moved, for example a knob on the keyboard.
+    Param {
+        /// Parameter id.
+        id: u32,
+        /// Normalised value.
+        value: f64,
+    },
+}
+
+impl Engine {
+    fn note(kind: u32, pitch: u8, velocity: u8) -> Event {
+        // SAFETY: Event is plain data; every field used is set below.
+        let mut ev: Event = unsafe { std::mem::zeroed() };
+        ev.flags = kIsLive as uint16;
+        ev.r#type = kind as uint16;
+        let v = f32::from(velocity) / 127.0;
+        if kind == kNoteOnEvent {
+            ev.__field0.noteOn = NoteOnEvent {
+                channel: 0,
+                pitch: i16::from(pitch),
+                tuning: 0.0,
+                velocity: v,
+                length: 0,
+                noteId: -1,
+            };
+        } else {
+            ev.__field0.noteOff = NoteOffEvent {
+                channel: 0,
+                pitch: i16::from(pitch),
+                velocity: v,
+                noteId: -1,
+                tuning: 0.0,
+            };
+        }
+        ev
+    }
+
+    /// Fill `out` (interleaved, `channels` wide) from the main output bus,
+    /// applying `inputs` at the start. Returns the peak level.
+    fn render(
+        &mut self,
+        out: &mut [f32],
+        channels: usize,
+        inputs: &[Input],
+    ) -> Result<f32, HostError> {
+        out.fill(0.0);
+        if !self.active {
+            return Ok(0.0);
+        }
+        let channels = channels.max(1);
+        let total = out.len() / channels;
+        let mut done = 0;
+        let mut peak = 0.0f32;
+        let mut pending = inputs;
+        while done < total {
+            let frames = (total - done).min(self.max_block);
+            // Inputs land at the start of the first chunk.
+            let notes: Vec<Event> = pending
+                .iter()
+                .filter_map(|i| match *i {
+                    Input::NoteOn { pitch, velocity } => {
+                        Some(Self::note(kNoteOnEvent, pitch, velocity))
+                    }
+                    Input::NoteOff { pitch, velocity } => {
+                        Some(Self::note(kNoteOffEvent, pitch, velocity))
+                    }
+                    Input::Param { .. } => None,
+                })
+                .collect();
+            let params: Vec<(ParamID, ParamValue)> = pending
+                .iter()
+                .filter_map(|i| match *i {
+                    Input::Param { id, value } => Some((id, value)),
+                    _ => None,
+                })
+                .collect();
+            pending = &[];
+            if let Ok(mut e) = self.events.events.lock() {
+                e.clear();
+                e.extend(notes);
+            }
+            self.changes.set(&params);
+
+            let mut in_ptrs: Vec<Vec<*mut f32>> = self
+                .inputs
+                .iter_mut()
+                .map(|bus| {
+                    bus.iter_mut()
+                        .map(|ch| {
+                            ch.fill(0.0);
+                            ch.as_mut_ptr()
+                        })
+                        .collect()
+                })
+                .collect();
+            let mut out_ptrs: Vec<Vec<*mut f32>> = self
+                .outputs
+                .iter_mut()
+                .map(|bus| {
+                    bus.iter_mut()
+                        .map(|ch| {
+                            ch.fill(0.0);
+                            ch.as_mut_ptr()
+                        })
+                        .collect()
+                })
+                .collect();
+            let mut bus = |ptrs: &mut Vec<*mut f32>| AudioBusBuffers {
+                numChannels: ptrs.len() as int32,
+                silenceFlags: 0,
+                __field0: AudioBusBuffers__type0 {
+                    channelBuffers32: ptrs.as_mut_ptr(),
+                },
+            };
+            let mut ins: Vec<AudioBusBuffers> = in_ptrs.iter_mut().map(&mut bus).collect();
+            let mut outs: Vec<AudioBusBuffers> = out_ptrs.iter_mut().map(&mut bus).collect();
+            // SAFETY: ProcessContext is plain data.
+            let mut context: ProcessContext = unsafe { std::mem::zeroed() };
+            context.state = kTempoValid;
+            context.sampleRate = self.sample_rate;
+            context.tempo = 120.0;
+            context.timeSigNumerator = 4;
+            context.timeSigDenominator = 4;
+            let mut data = ProcessData {
+                processMode: kRealtime as int32,
+                symbolicSampleSize: kSample32 as int32,
+                numSamples: frames as int32,
+                numInputs: ins.len() as int32,
+                numOutputs: outs.len() as int32,
+                inputs: if ins.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    ins.as_mut_ptr()
+                },
+                outputs: if outs.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    outs.as_mut_ptr()
+                },
+                inputParameterChanges: if self.changes.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    self.changes_ptr.as_ptr()
+                },
+                outputParameterChanges: std::ptr::null_mut(),
+                inputEvents: self.events_ptr.as_ptr(),
+                outputEvents: std::ptr::null_mut(),
+                processContext: &mut context,
+            };
+            // SAFETY: every buffer pointer refers to a live Vec of max_block
+            // samples, and the event and change lists outlive the call.
+            check("process", unsafe { self.processor.process(&mut data) })?;
+
+            if let Some(main) = self.outputs.first().filter(|b| !b.is_empty()) {
+                for f in 0..frames {
+                    for c in 0..channels {
+                        let sample = main
+                            .get(c % main.len())
+                            .and_then(|ch| ch.get(f))
+                            .copied()
+                            .unwrap_or(0.0);
+                        if let Some(slot) = out.get_mut((done + f) * channels + c) {
+                            *slot = sample;
+                        }
+                        peak = peak.max(sample.abs());
+                    }
+                }
+            }
+            done += frames;
+        }
+        Ok(peak)
+    }
+}
+
+/// A handle to a running plugin's audio engine, for an audio thread.
+///
+/// Stop the audio stream that uses this before dropping the [`Plugin`] or
+/// calling [`Plugin::stop_audio`]; after either, `render` writes silence.
+#[derive(Clone)]
+pub struct Audio(Arc<Mutex<Engine>>);
+
+impl Audio {
+    /// Render `out`, interleaved and `channels` wide, applying `inputs` first.
+    /// Returns the peak level.
+    pub fn render(
+        &self,
+        out: &mut [f32],
+        channels: usize,
+        inputs: &[Input],
+    ) -> Result<f32, HostError> {
+        match self.0.lock() {
+            Ok(mut e) => e.render(out, channels, inputs),
+            Err(_) => {
+                out.fill(0.0);
+                Ok(0.0)
+            }
+        }
+    }
+
+    /// The sample rate the engine was set up for.
+    pub fn sample_rate(&self) -> f64 {
+        self.0.lock().map(|e| e.sample_rate).unwrap_or(0.0)
+    }
 }
 
 impl Plugin<'_> {
@@ -414,19 +644,44 @@ impl Plugin<'_> {
             // Some plugins return kNotImplemented here; that is allowed.
             processor.setProcessing(1);
         }
-        self.engine = Some(Engine {
+        let events = ComWrapper::new(com::EventList::default());
+        let changes = ComWrapper::new(com::ParameterChanges::default());
+        let (Some(events_ptr), Some(changes_ptr)) = (
+            events.to_com_ptr::<IEventList>(),
+            changes.to_com_ptr::<IParameterChanges>(),
+        ) else {
+            return Err(HostError::Call {
+                call: "event lists",
+                code: kNoInterface,
+            });
+        };
+        self.engine = Some(Arc::new(Mutex::new(Engine {
             processor,
             sample_rate,
             max_block,
+            active: true,
             inputs,
             outputs,
-        });
+            events,
+            events_ptr,
+            changes,
+            changes_ptr,
+        })));
         Ok(())
+    }
+
+    /// A handle an audio thread can render through. `None` until
+    /// [`start_audio`](Self::start_audio).
+    pub fn audio(&self) -> Option<Audio> {
+        self.engine.clone().map(Audio)
     }
 
     /// Stop the audio engine, if it is running.
     pub fn stop_audio(&mut self) {
-        if let Some(e) = self.engine.take() {
+        if let Some(engine) = self.engine.take()
+            && let Ok(mut e) = engine.lock()
+        {
+            e.active = false;
             // SAFETY: the reverse of start_audio.
             unsafe {
                 e.processor.setProcessing(0);
@@ -435,86 +690,16 @@ impl Plugin<'_> {
         }
     }
 
-    /// Run one block of `frames` with silent input and no events. Returns the
-    /// output's peak level, which shows whether the plugin made sound.
+    /// Run one block of `frames` with no notes, on the calling thread.
+    /// Returns the output's peak level. For hosts without an audio thread;
+    /// with one, render through [`audio`](Self::audio) instead.
     pub fn process_block(&mut self, frames: usize) -> Result<f32, HostError> {
-        let Some(e) = self.engine.as_mut() else {
-            return Err(HostError::Call {
-                call: "process (engine not started)",
-                code: kNotInitialized,
-            });
-        };
-        let frames = frames.min(e.max_block);
-        let mut in_ptrs: Vec<Vec<*mut f32>> = e
-            .inputs
-            .iter_mut()
-            .map(|bus| {
-                bus.iter_mut()
-                    .map(|ch| {
-                        ch.fill(0.0);
-                        ch.as_mut_ptr()
-                    })
-                    .collect()
-            })
-            .collect();
-        let mut out_ptrs: Vec<Vec<*mut f32>> = e
-            .outputs
-            .iter_mut()
-            .map(|bus| {
-                bus.iter_mut()
-                    .map(|ch| {
-                        ch.fill(0.0);
-                        ch.as_mut_ptr()
-                    })
-                    .collect()
-            })
-            .collect();
-        let mut bus = |ptrs: &mut Vec<*mut f32>| AudioBusBuffers {
-            numChannels: ptrs.len() as int32,
-            silenceFlags: 0,
-            __field0: AudioBusBuffers__type0 {
-                channelBuffers32: ptrs.as_mut_ptr(),
-            },
-        };
-        let mut ins: Vec<AudioBusBuffers> = in_ptrs.iter_mut().map(&mut bus).collect();
-        let mut outs: Vec<AudioBusBuffers> = out_ptrs.iter_mut().map(&mut bus).collect();
-        let mut context: ProcessContext = unsafe { std::mem::zeroed() };
-        context.state = kTempoValid;
-        context.sampleRate = e.sample_rate;
-        context.tempo = 120.0;
-        context.timeSigNumerator = 4;
-        context.timeSigDenominator = 4;
-        let mut data = ProcessData {
-            processMode: kRealtime as int32,
-            symbolicSampleSize: kSample32 as int32,
-            numSamples: frames as int32,
-            numInputs: ins.len() as int32,
-            numOutputs: outs.len() as int32,
-            inputs: if ins.is_empty() {
-                std::ptr::null_mut()
-            } else {
-                ins.as_mut_ptr()
-            },
-            outputs: if outs.is_empty() {
-                std::ptr::null_mut()
-            } else {
-                outs.as_mut_ptr()
-            },
-            inputParameterChanges: std::ptr::null_mut(),
-            outputParameterChanges: std::ptr::null_mut(),
-            inputEvents: std::ptr::null_mut(),
-            outputEvents: std::ptr::null_mut(),
-            processContext: &mut context,
-        };
-        // SAFETY: every buffer pointer refers to a live Vec of max_block samples.
-        check("process", unsafe { e.processor.process(&mut data) })?;
-        let peak = e
-            .outputs
-            .iter()
-            .flatten()
-            .flat_map(|ch| ch.iter().take(frames))
-            .fold(0.0f32, |m, s| m.max(s.abs()));
-        Ok(peak)
+        let audio = self.audio().ok_or(HostError::Call {
+            call: "process (engine not started)",
+            code: kNotInitialized,
+        })?;
+        let mut scratch = vec![0.0f32; frames * 2];
+        audio.render(&mut scratch, 2, &[])
     }
 
     /// The `restartComponent` flags the plugin has raised since the last
@@ -625,6 +810,12 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
     use super::*;
+
+    #[test]
+    fn the_audio_handle_can_go_to_an_audio_thread() {
+        fn send_and_sync<T: Send + Sync>() {}
+        send_and_sync::<Audio>();
+    }
 
     #[test]
     fn an_nks_uid_becomes_a_big_endian_class_id_on_macos() {

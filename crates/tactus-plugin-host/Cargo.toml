@@ -17,3 +17,5 @@ core-foundation = "0.10"
 [dev-dependencies]
 tactus-nks = { path = "../tactus-nks", features = ["resources"] }
 tactus-odr = { path = "../tactus-odr" }
+tactus-io = { path = "../tactus-io" }
+cpal = "0.18"
