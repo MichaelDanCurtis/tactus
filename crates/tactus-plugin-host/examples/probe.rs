@@ -94,7 +94,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "split   controller is a separate object: {}",
         plugin.separate_controller()
     );
-    let snapshot = |plugin: &tactus_plugin_host::Plugin<'_>| -> Vec<f64> {
+    let snapshot = |plugin: &tactus_plugin_host::Plugin| -> Vec<f64> {
         params.iter().map(|p| plugin.value(p.id)).collect()
     };
     let all_before = snapshot(&plugin);

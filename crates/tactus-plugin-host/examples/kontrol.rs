@@ -46,7 +46,7 @@ struct Clock {
 }
 
 impl Clock {
-    fn tick(&mut self, plugin: &mut Plugin<'_>) {
+    fn tick(&mut self, plugin: &mut Plugin) {
         if self.driven_by_device {
             return;
         }
@@ -62,7 +62,7 @@ impl Clock {
 
 /// Load a preset's state and wait, engine running, until the plugin says its
 /// values changed (`restartComponent` with `kParamValuesChanged`).
-fn load(plugin: &mut Plugin<'_>, clock: &mut Clock, preset: &Preset) -> Result<f32, String> {
+fn load(plugin: &mut Plugin, clock: &mut Clock, preset: &Preset) -> Result<f32, String> {
     plugin.take_restart_flags();
     plugin
         .load_state(&preset.plugin_state)
@@ -82,7 +82,7 @@ fn load(plugin: &mut Plugin<'_>, clock: &mut Clock, preset: &Preset) -> Result<f
 fn publish(
     client: &mut Client,
     serial: &str,
-    plugin: &Plugin<'_>,
+    plugin: &Plugin,
     preset: &Preset,
 ) -> Result<Vec<String>, String> {
     let e = |e: tactus_odr::OdrError| e.to_string();

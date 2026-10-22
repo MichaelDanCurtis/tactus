@@ -547,6 +547,20 @@ impl Engine {
     /// plugin has been stopped.
     pub(crate) fn render(&mut self, out: &mut [f32], channels: usize, inputs: &[Input]) -> f32 {
         out.fill(0.0);
+        let channels = channels.max(1);
+        self.guarded(Out::Interleaved(out, channels), inputs)
+    }
+
+    /// As [`render`](Self::render), into separate channel buffers of equal
+    /// length, as a DAW hands them to a plugin.
+    pub(crate) fn render_planar(&mut self, outs: &mut [&mut [f32]], inputs: &[Input]) -> f32 {
+        for ch in outs.iter_mut() {
+            ch.fill(0.0);
+        }
+        self.guarded(Out::Planar(outs), inputs)
+    }
+
+    fn guarded(&mut self, out: Out<'_, '_>, inputs: &[Input]) -> f32 {
         if self
             .state
             .compare_exchange(IDLE, RENDERING, Ordering::Acquire, Ordering::Relaxed)
@@ -554,13 +568,13 @@ impl Engine {
         {
             return 0.0;
         }
-        let peak = self.render_inner(out, channels.max(1), inputs);
+        let peak = self.render_inner(out, inputs);
         self.state.store(IDLE, Ordering::Release);
         peak
     }
 
-    fn render_inner(&mut self, out: &mut [f32], channels: usize, inputs: &[Input]) -> f32 {
-        let total = out.len() / channels;
+    fn render_inner(&mut self, mut out: Out<'_, '_>, inputs: &[Input]) -> f32 {
+        let total = out.frames();
         let mut done = 0;
         let mut peak = 0.0f32;
         let mut pending = inputs;
@@ -622,6 +636,7 @@ impl Engine {
             let _ = unsafe { self.processor.process(&mut data) };
 
             if let Some(main) = self.outputs.first().filter(|b| !b.is_empty()) {
+                let channels = out.channels();
                 for f in 0..frames {
                     for c in 0..channels {
                         let sample = main
@@ -629,9 +644,7 @@ impl Engine {
                             .and_then(|ch| ch.get(f))
                             .copied()
                             .unwrap_or(0.0);
-                        if let Some(slot) = out.get_mut((done + f) * channels + c) {
-                            *slot = sample;
-                        }
+                        out.put(done + f, c, sample);
                         peak = peak.max(sample.abs());
                     }
                 }
@@ -639,6 +652,40 @@ impl Engine {
             done += frames;
         }
         peak
+    }
+}
+
+/// Where rendered samples go.
+enum Out<'a, 'b> {
+    /// One buffer, `channels` samples per frame.
+    Interleaved(&'a mut [f32], usize),
+    /// One buffer per channel.
+    Planar(&'a mut [&'b mut [f32]]),
+}
+
+impl Out<'_, '_> {
+    fn channels(&self) -> usize {
+        match self {
+            Self::Interleaved(_, c) => *c,
+            Self::Planar(chs) => chs.len(),
+        }
+    }
+
+    fn frames(&self) -> usize {
+        match self {
+            Self::Interleaved(b, c) => b.len() / (*c).max(1),
+            Self::Planar(chs) => chs.iter().map(|c| c.len()).min().unwrap_or(0),
+        }
+    }
+
+    fn put(&mut self, frame: usize, channel: usize, sample: f32) {
+        let slot = match self {
+            Self::Interleaved(b, c) => b.get_mut(frame * *c + channel),
+            Self::Planar(chs) => chs.get_mut(channel).and_then(|ch| ch.get_mut(frame)),
+        };
+        if let Some(slot) = slot {
+            *slot = sample;
+        }
     }
 }
 
@@ -670,6 +717,12 @@ impl Audio {
     /// Returns the peak level. Real-time safe.
     pub fn render(&mut self, out: &mut [f32], channels: usize, inputs: &[Input]) -> f32 {
         self.0.render(out, channels, inputs)
+    }
+
+    /// Render into separate channel buffers (as a DAW provides them),
+    /// applying `inputs` first. Returns the peak level. Real-time safe.
+    pub fn render_planar(&mut self, outs: &mut [&mut [f32]], inputs: &[Input]) -> f32 {
+        self.0.render_planar(outs, inputs)
     }
 
     /// The sample rate the engine was set up for.

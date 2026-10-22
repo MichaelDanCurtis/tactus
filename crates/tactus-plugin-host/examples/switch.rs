@@ -12,7 +12,7 @@ use tactus_nks::Preset;
 use tactus_plugin_host::{Module, PARAM_VALUES_CHANGED, Plugin, class_id, pump_main_run_loop};
 
 /// Process in real time until the plugin signals, or `limit` passes.
-fn wait_for_signal(plugin: &mut Plugin<'_>, limit: Duration) -> Option<Duration> {
+fn wait_for_signal(plugin: &mut Plugin, limit: Duration) -> Option<Duration> {
     let t = Instant::now();
     while t.elapsed() < limit {
         let _ = plugin.process_block(512);
@@ -24,7 +24,7 @@ fn wait_for_signal(plugin: &mut Plugin<'_>, limit: Duration) -> Option<Duration>
     None
 }
 
-fn run_for(plugin: &mut Plugin<'_>, d: Duration) {
+fn run_for(plugin: &mut Plugin, d: Duration) {
     let t = Instant::now();
     while t.elapsed() < d {
         let _ = plugin.process_block(512);

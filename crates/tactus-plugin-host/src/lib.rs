@@ -10,8 +10,8 @@
 //!
 //! # Lifetimes
 //!
-//! A [`Plugin`] borrows the [`Module`] it came from, so the library cannot be
-//! unloaded while an instance is alive.
+//! A [`Plugin`] holds the [`Module`] it came from (`Arc`), so the library
+//! cannot be unloaded while an instance is alive.
 
 #![deny(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -101,10 +101,16 @@ pub struct Module {
     _bundle: core_foundation::bundle::CFBundle,
 }
 
+// SAFETY: after `load` a Module is never mutated until it drops. Its factory
+// is a VST3 IPluginFactory, which may be called from any thread; the library
+// handle and the CFBundle are immutable references to loaded images.
+unsafe impl Send for Module {}
+unsafe impl Sync for Module {}
+
 impl Module {
     /// Load a `.vst3` bundle.
     #[cfg(target_os = "macos")]
-    pub fn load(bundle: &Path) -> Result<Self, HostError> {
+    pub fn load(bundle: &Path) -> Result<Arc<Self>, HostError> {
         use core_foundation::base::TCFType;
         use core_foundation::bundle::CFBundle;
         use core_foundation::url::CFURL;
@@ -145,12 +151,12 @@ impl Module {
         }
         // SAFETY: GetPluginFactory returns an owned reference, or null.
         let factory = unsafe { ComPtr::from_raw(get_factory()) }.ok_or(HostError::NoFactory)?;
-        Ok(Self {
+        Ok(Arc::new(Self {
             factory: Some(factory),
             exit,
             _lib: lib,
             _bundle: cf,
-        })
+        }))
     }
 
     fn factory(&self) -> Result<&ComPtr<IPluginFactory>, HostError> {
@@ -194,7 +200,7 @@ impl Module {
     }
 
     /// Make and initialise one instance of an audio class.
-    pub fn instantiate(&self, cid: &[u8; 16]) -> Result<Plugin<'_>, HostError> {
+    pub fn instantiate(self: &Arc<Self>, cid: &[u8; 16]) -> Result<Plugin, HostError> {
         let host = ComWrapper::new(com::Host {
             name: "tactus".into(),
         });
@@ -255,7 +261,6 @@ impl Module {
         };
 
         Ok(Plugin {
-            _module: self,
             component,
             controller,
             separate,
@@ -264,6 +269,7 @@ impl Module {
             handler,
             engine: None,
             running: None,
+            _module: Arc::clone(self),
         })
     }
 }
@@ -300,8 +306,7 @@ pub struct Param {
 }
 
 /// A running plugin instance.
-pub struct Plugin<'m> {
-    _module: &'m Module,
+pub struct Plugin {
     component: ComPtr<IComponent>,
     controller: ComPtr<IEditController>,
     separate: bool,
@@ -310,12 +315,14 @@ pub struct Plugin<'m> {
     handler: ComWrapper<com::ComponentHandler>,
     engine: Option<Box<engine::Engine>>,
     running: Option<(ComPtr<IAudioProcessor>, Arc<std::sync::atomic::AtomicU8>)>,
+    // Last: released after every object the module made.
+    _module: Arc<Module>,
 }
 
 /// `restartComponent` flag: parameter values changed, re-read them.
 pub const PARAM_VALUES_CHANGED: i32 = 1 << 2;
 
-impl Plugin<'_> {
+impl Plugin {
     /// Hand the plugin its saved state, as opaque bytes, then let the
     /// controller sync to it.
     ///
@@ -523,7 +530,7 @@ impl Plugin<'_> {
     }
 }
 
-impl Drop for Plugin<'_> {
+impl Drop for Plugin {
     fn drop(&mut self) {
         self.stop_audio();
         // SAFETY: teardown in the order the VST3 docs give: disconnect, then
