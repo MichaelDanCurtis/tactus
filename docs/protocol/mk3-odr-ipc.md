@@ -1061,3 +1061,9 @@ color.db` is a SQLite table `color(Location, Name, Value, seqidx)`. Rows named
 `FC6949`, `Massive X` → `FF4D00`, `FM8` → `EBE9EA`. The largest copy is under
 `Komplete Kontrol/PAResources` (2,142 rows). Its sibling rows `MST_bgcolor`
 and `VB_bgcolor` are browser tile backgrounds.
+
+**Across products, confirmed by the owner:** stepping between a Super 8 R2
+preset and two Massive X presets switched the header banner each time. Each
+publish sent that product's arc colour (`#FC6949`, `#E17600`, checked in the
+log). Both read as orange on the panel, so this pair cannot show the change
+by eye. The colour test above shows the arcs follow every publish.

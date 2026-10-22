@@ -12,4 +12,4 @@ sha2 = "0.10"
 thiserror = "2"
 
 [dev-dependencies]
-tactus-nks = { path = "../tactus-nks" }
+tactus-nks = { path = "../tactus-nks", features = ["resources"] }

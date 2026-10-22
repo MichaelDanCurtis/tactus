@@ -1,12 +1,16 @@
 //! Show an NKS preset on the MK3: its plugin name, every knob page with the
 //! preset's own section headers and labels, and knobs that turn. The preset
 //! up/down buttons step through the other presets in the same folder. When
-//! the product ships a hardware banner, it is shown above the knobs.
+//! the product ships a hardware banner, it is shown above the knobs, and the
+//! knob arcs take the product's own colour.
 //!
 //! ```text
 //! TACTUS_ODR_REGISTRY=/path/to/symbol_registry.json \
-//!   cargo run -p tactus-odr --example preset -- <preset.nksf> [seconds]
+//!   cargo run -p tactus-odr --example preset -- <preset.nksf>... [seconds]
 //! ```
+//!
+//! With one preset, the preset buttons step through its folder. With several,
+//! they step through the ones given, which can come from different products.
 //!
 //! This shows a preset; it does not host the plugin. Knob values are kept
 //! here, starting at 50%, and are not the plugin's. The page buttons need no
@@ -108,6 +112,11 @@ fn show(client: &mut Client, preset: &Preset) -> Result<Shown, OdrError> {
         },
         None => None,
     };
+    // The product's own arc colour; without one the device draws white.
+    let arc = preset.info.bankchain.first().and_then(|product| {
+        artwork::control_color(Path::new(artwork::MAC_RESOURCE_ROOT), product)
+            .map(|[r, g, b]| Rgb { r, g, b })
+    });
     client.publish_parameter_page(
         SERIAL,
         &ParameterPage {
@@ -116,7 +125,7 @@ fn show(client: &mut Client, preset: &Preset) -> Result<Shown, OdrError> {
             show_page: 0,
             background,
             plugin_color: Some(Rgb::DEFAULT),
-            control_color: Some(Rgb::DEFAULT),
+            control_color: arc,
         },
     )?;
     println!(
@@ -128,6 +137,10 @@ fn show(client: &mut Client, preset: &Preset) -> Result<Shown, OdrError> {
     match &banner {
         Some(path) => println!("banner: {}", path.display()),
         None => println!("banner: none for this product"),
+    }
+    match arc {
+        Some(c) => println!("arcs:   #{:02X}{:02X}{:02X}", c.r, c.g, c.b),
+        None => println!("arcs:   device default"),
     }
     Ok(Shown { values, headers })
 }
@@ -148,12 +161,17 @@ fn siblings(path: &Path) -> Vec<PathBuf> {
 }
 
 fn main() -> Result<(), OdrError> {
-    let mut args = std::env::args().skip(1);
-    let Some(first) = args.next() else {
-        eprintln!("usage: preset <preset.nksf> [seconds]");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let given: Vec<PathBuf> = args
+        .iter()
+        .filter(|a| a.ends_with(".nksf"))
+        .map(PathBuf::from)
+        .collect();
+    let Some(first) = given.first().cloned() else {
+        eprintln!("usage: preset <preset.nksf>... [seconds]");
         return Ok(());
     };
-    let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(120);
+    let seconds: u64 = args.iter().find_map(|a| a.parse().ok()).unwrap_or(120);
     let Ok(registry) = std::env::var("TACTUS_ODR_REGISTRY") else {
         eprintln!("Set TACTUS_ODR_REGISTRY to the symbol registry JSON.");
         return Ok(());
@@ -164,8 +182,12 @@ fn main() -> Result<(), OdrError> {
     })?;
     let read = |p: &Path| Preset::read(p).map_err(|e| OdrError::Decode(e.to_string()));
 
-    let mut path = PathBuf::from(first);
-    let folder = siblings(&path);
+    let mut path = first;
+    let folder = if given.len() > 1 {
+        given
+    } else {
+        siblings(&path)
+    };
     let mut client =
         Client::connect_with_registry(tactus_odr::DEFAULT_SOCKET, Registry::from_json(&text)?)?;
     client.instance_hello("tactus-preset", "0.1.0")?;
@@ -176,7 +198,7 @@ fn main() -> Result<(), OdrError> {
     }
     let mut on_screen = show(&mut client, &read(&path)?)?;
     println!(
-        "{} presets in this folder. Knobs, page buttons, preset up/down — {seconds}s.",
+        "{} presets to step through. Knobs, page buttons, preset up/down — {seconds}s.",
         folder.len()
     );
 

@@ -8,4 +8,10 @@ description = "Reader for NKS preset files: metadata, plugin id and knob pages"
 
 [dependencies]
 rmpv = "1.3"
+rusqlite = { version = "0.32", optional = true }
 thiserror = "2"
+
+[features]
+# Read NI's per-product resource databases (the arc colour). Links the
+# system SQLite.
+resources = ["dep:rusqlite"]
