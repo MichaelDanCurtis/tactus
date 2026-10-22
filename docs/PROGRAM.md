@@ -262,6 +262,8 @@ before M1 ships.
 
 ## 9. Immediate next steps
 
+Small open items are parked in `LATER.md`.
+
 The first three are done: §5 is resolved, the decomposition held, and the C ABI
 has been present since the crate was scaffolded — which did its job, since
 writing a real C program against it is what found every boundary bug so far.
