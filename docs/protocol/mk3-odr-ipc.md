@@ -944,6 +944,17 @@ or disabled from off, on this keyboard was not written down.
 The undo fields parse without complaint, so either the Undo button's light is
 not driven by `undo_state` or it needs something else as well. Open.
 
+**Nothing blinks.** A second pass ran the same lights with the transport
+**playing**, at 120 and 60 BPM: Tempo, Metro, and Count-in with Record
+armed. None blinked. In a final step the host toggled `tap_tempo` on and off
+four times a second while playing. The owner watched for eight seconds and
+saw no blinking. Why the host's own toggling did not show is unexplained.
+The device may ignore `tap_tempo` while playing, or drop rapid updates.
+
+This agrees with the vendor's own software. Standalone Komplete Kontrol does
+not drive the transport lights at all (owner observation), and its code sends
+host state only when it changes, never per beat. See `kk-client.md`.
+
 ### Device → host: transport presses
 
 Through the same `plugin_action` channel as knobs and browser controls, as

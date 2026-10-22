@@ -4,8 +4,12 @@
 //!
 //! ```text
 //! TACTUS_ODR_REGISTRY=/path/to/symbol_registry.json \
-//!   cargo run -p tactus-odr --example lights -- [minutes]
+//!   cargo run -p tactus-odr --example lights -- [minutes] [tempo]
 //! ```
+//!
+//! `tempo` runs the blink set instead: the same lights with the transport
+//! playing, at two tempos, to see whether the keyboard blinks them itself.
+//! Its last step has the host blink Tempo, the fallback if it does not.
 
 use std::time::{Duration, Instant};
 
@@ -15,10 +19,9 @@ use tactus_odr::{Client, Control, HostState, Knob, OdrError, Record, Registry, T
 const SERIAL: &str = "99FE7169";
 
 fn main() -> Result<(), OdrError> {
-    let minutes: u64 = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let minutes: u64 = args.iter().find_map(|a| a.parse().ok()).unwrap_or(10);
+    let tempo_set = args.iter().any(|a| a == "tempo");
     let Ok(path) = std::env::var("TACTUS_ODR_REGISTRY") else {
         eprintln!("Set TACTUS_ODR_REGISTRY to the symbol registry JSON.");
         return Ok(());
@@ -44,7 +47,7 @@ fn main() -> Result<(), OdrError> {
         track_name: "tactus",
         preset_name: "Light check",
     };
-    let steps: Vec<(&str, HostState<'_>)> = vec![
+    let plain: Vec<(&str, HostState<'_>)> = vec![
         ("Baseline: all off", base),
         (
             "PLAY: playing",
@@ -152,6 +155,58 @@ fn main() -> Result<(), OdrError> {
         ),
     ];
 
+    let playing = HostState {
+        transport: Transport::Playing,
+        ..base
+    };
+    let slow = HostState {
+        tempo: 60.0,
+        ..playing
+    };
+    let blink: Vec<(&str, HostState<'_>)> = vec![
+        ("Playing, all off", playing),
+        (
+            "Playing, TEMPO on, 120",
+            HostState {
+                tap_tempo: Control::On,
+                ..playing
+            },
+        ),
+        (
+            "Playing, TEMPO on, 60",
+            HostState {
+                tap_tempo: Control::On,
+                ..slow
+            },
+        ),
+        (
+            "Playing, METRO on, 120",
+            HostState {
+                metro: Control::On,
+                ..playing
+            },
+        ),
+        (
+            "Playing, METRO on, 60",
+            HostState {
+                metro: Control::On,
+                ..slow
+            },
+        ),
+        (
+            "Playing, COUNT-IN + REC armed",
+            HostState {
+                count_in: Control::On,
+                record: Record::Armed,
+                ..playing
+            },
+        ),
+        // The host toggles Tempo on each half beat; see the loop below.
+        ("HOST blinks TEMPO, 120", playing),
+    ];
+    let host_blinks = |label: &str| label.starts_with("HOST blinks");
+    let steps = if tempo_set { blink } else { plain };
+
     let mut client =
         Client::connect_with_registry(tactus_odr::DEFAULT_SOCKET, Registry::from_json(&text)?)?;
     client.instance_hello("tactus-lights", "0.1.0")?;
@@ -183,6 +238,7 @@ fn main() -> Result<(), OdrError> {
     println!("{} step {:>2}: {}", stamp(start), step + 1, steps[0].0);
 
     let mut last = Instant::now();
+    let mut lit = Control::Off;
     while start.elapsed() < Duration::from_secs(minutes * 60) {
         for n in client.listen(Duration::from_millis(50))? {
             for event in events::decode(client.registry(), &n) {
@@ -203,12 +259,29 @@ fn main() -> Result<(), OdrError> {
                 }
             }
         }
+        let Some(&(label, st)) = steps.get(step) else {
+            continue;
+        };
+        if host_blinks(label) {
+            // On for the first half of each beat, off for the second.
+            let beat = 60.0 / st.tempo;
+            let phase = start.elapsed().as_secs_f64() % beat;
+            let tap_tempo = if phase < beat / 2.0 {
+                Control::On
+            } else {
+                Control::Off
+            };
+            if tap_tempo != lit {
+                lit = tap_tempo;
+                client.set_host_state(SERIAL, &HostState { tap_tempo, ..st })?;
+            }
+        }
         // Keep focus, and keep re-asserting the state in case the device
         // drops it.
         if last.elapsed() >= Duration::from_millis(500) {
             client.request_focus(SERIAL)?;
-            if let Some((_, st)) = steps.get(step) {
-                client.set_host_state(SERIAL, st)?;
+            if !host_blinks(label) {
+                client.set_host_state(SERIAL, &st)?;
             }
             last = Instant::now();
         }
