@@ -75,12 +75,13 @@ shim and the shim loading Massive X (Wob Wolfer):
 | Saved state | ~31.9 KB, `TACTSHIM` header |
 | Reopen: a fresh, empty shim given that state | 0 parameters before, 2,102 after; plays (0.36) |
 | Editor | the instrument's own view; supports `NSView` |
+| Editor in a real window (`examples/window.rs`) | attached to an `NSWindow`'s content view as a DAW would: Massive X's full editor, 1249×723, showing the preset loaded through the shim. The screenshot is not in the repo: it is NI's artwork |
 | Two shims, play one then the other | the keyboard moves to each in turn; a background republish does not steal it |
 | Agent log | no complaints after value updates were limited to on-screen ids |
 
-**Not yet done on hardware:** everything above was run without a DAW. Ableton
-(goal items 2–4), and opening the window in a real host (item 5), need the
-owner. No DAW is installed on the development machine.
+**Not yet done in a DAW:** everything above ran without one. Ableton (goal
+items 2–4) needs the owner; no DAW is installed on the development machine.
+The window test stands in for item 5 until then.
 
 ## Open
 
