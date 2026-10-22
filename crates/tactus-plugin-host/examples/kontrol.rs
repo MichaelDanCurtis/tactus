@@ -168,7 +168,7 @@ fn siblings(path: &Path) -> Vec<PathBuf> {
 
 /// Open the default output device and drive the plugin from its callback.
 /// Inputs (notes, knob moves) reach the callback through `rx`.
-fn open_output(audio: Audio, rx: Receiver<Input>) -> Result<cpal::Stream, String> {
+fn open_output(mut audio: Audio, rx: Receiver<Input>) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -197,9 +197,7 @@ fn open_output(audio: Audio, rx: Receiver<Input>) -> Result<cpal::Stream, String
                 while let Ok(i) = rx.try_recv() {
                     pending.push(i);
                 }
-                if audio.render(data, channels, &pending).is_err() {
-                    data.fill(0.0);
-                }
+                audio.render(data, channels, &pending);
             },
             |err| eprintln!("audio: {err}"),
             None,
@@ -246,21 +244,27 @@ fn main() -> Result<(), String> {
         .start_audio(rate, MAX_BLOCK)
         .map_err(|e| e.to_string())?;
     let (tx, rx): (SyncSender<Input>, Receiver<Input>) = sync_channel(1024);
-    let audio = plugin.audio().ok_or("engine not started")?;
-    let stream = open_output(audio, rx);
+    // With an output device, its callback owns the engine. Without one, the
+    // engine stays here and the clock drives it, silently.
+    let stream = match output_rate() {
+        Some(_) => {
+            let audio = plugin.take_audio().ok_or("engine not started")?;
+            let s = open_output(audio, rx)?;
+            s.play().map_err(|e| e.to_string())?;
+            println!("audio: default output at {rate} Hz");
+            Some(s)
+        }
+        None => {
+            println!("audio: no output device; running silent");
+            None
+        }
+    };
     let mut clock = Clock {
         start: Instant::now(),
         blocks: 0,
         rate,
-        driven_by_device: stream.is_ok(),
+        driven_by_device: stream.is_some(),
     };
-    match &stream {
-        Ok(s) => {
-            s.play().map_err(|e| e.to_string())?;
-            println!("audio: default output at {rate} Hz");
-        }
-        Err(err) => println!("audio: {err}; running silent"),
-    }
     // Note on/off copies for the light guide, which the main loop owns.
     let (lights_tx, lights_rx) = std::sync::mpsc::channel::<(u8, bool)>();
     let mut held = [false; 128];

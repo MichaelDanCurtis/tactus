@@ -17,19 +17,18 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod com;
+mod engine;
 
-use std::collections::HashMap;
+pub use engine::{
+    AFTERTOUCH, Audio, Input, MAX_EVENTS, MAX_PARAM_CHANGES, MidiMap, PITCH_BEND, midi_to_input,
+};
+
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use vst3::Steinberg::Vst::BusDirections_::{kInput, kOutput};
-use vst3::Steinberg::Vst::Event_::EventFlags_::kIsLive;
-use vst3::Steinberg::Vst::Event_::EventTypes_::{kNoteOffEvent, kNoteOnEvent, kPolyPressureEvent};
 use vst3::Steinberg::Vst::MediaTypes_::{kAudio, kEvent};
-use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_::kTempoValid;
-use vst3::Steinberg::Vst::ProcessModes_::kRealtime;
-use vst3::Steinberg::Vst::SymbolicSampleSizes_::kSample32;
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{ComPtr, ComWrapper, Interface};
@@ -64,7 +63,7 @@ pub enum HostError {
     NoController,
 }
 
-fn check(call: &'static str, code: tresult) -> Result<(), HostError> {
+pub(crate) fn check(call: &'static str, code: tresult) -> Result<(), HostError> {
     if code == kResultOk {
         Ok(())
     } else {
@@ -264,6 +263,7 @@ impl Module {
             _host: host,
             handler,
             engine: None,
+            running: None,
         })
     }
 }
@@ -308,313 +308,12 @@ pub struct Plugin<'m> {
     points: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
     _host: ComWrapper<com::Host>,
     handler: ComWrapper<com::ComponentHandler>,
-    engine: Option<Arc<Mutex<Engine>>>,
+    engine: Option<Box<engine::Engine>>,
+    running: Option<(ComPtr<IAudioProcessor>, Arc<std::sync::atomic::AtomicU8>)>,
 }
 
 /// `restartComponent` flag: parameter values changed, re-read them.
 pub const PARAM_VALUES_CHANGED: i32 = 1 << 2;
-
-/// The audio side, once started: the processor and buffers for every bus.
-struct Engine {
-    processor: ComPtr<IAudioProcessor>,
-    sample_rate: f64,
-    max_block: usize,
-    active: bool,
-    /// One buffer set per input bus, then per output bus: channels of samples.
-    inputs: Vec<Vec<Vec<f32>>>,
-    outputs: Vec<Vec<Vec<f32>>>,
-    events: ComWrapper<com::EventList>,
-    events_ptr: ComPtr<IEventList>,
-    changes: ComWrapper<com::ParameterChanges>,
-    changes_ptr: ComPtr<IParameterChanges>,
-}
-
-/// Something for the audio engine to act on in the next block.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Input {
-    /// A key went down. Velocity 1-127.
-    NoteOn {
-        /// MIDI note number.
-        pitch: u8,
-        /// MIDI velocity.
-        velocity: u8,
-    },
-    /// A key came up.
-    NoteOff {
-        /// MIDI note number.
-        pitch: u8,
-        /// MIDI release velocity.
-        velocity: u8,
-    },
-    /// Pressure on one held key.
-    PolyPressure {
-        /// MIDI note number.
-        pitch: u8,
-        /// Pressure, 0-127.
-        pressure: u8,
-    },
-    /// A parameter moved, for example a knob on the keyboard.
-    Param {
-        /// Parameter id.
-        id: u32,
-        /// Normalised value.
-        value: f64,
-    },
-}
-
-impl Engine {
-    fn note(kind: u32, pitch: u8, velocity: u8) -> Event {
-        // SAFETY: Event is plain data; every field used is set below.
-        let mut ev: Event = unsafe { std::mem::zeroed() };
-        ev.flags = kIsLive as uint16;
-        ev.r#type = kind as uint16;
-        let v = f32::from(velocity) / 127.0;
-        if kind == kNoteOnEvent {
-            ev.__field0.noteOn = NoteOnEvent {
-                channel: 0,
-                pitch: i16::from(pitch),
-                tuning: 0.0,
-                velocity: v,
-                length: 0,
-                noteId: -1,
-            };
-        } else {
-            ev.__field0.noteOff = NoteOffEvent {
-                channel: 0,
-                pitch: i16::from(pitch),
-                velocity: v,
-                noteId: -1,
-                tuning: 0.0,
-            };
-        }
-        ev
-    }
-
-    fn pressure(pitch: u8, pressure: u8) -> Event {
-        // SAFETY: Event is plain data; every field used is set below.
-        let mut ev: Event = unsafe { std::mem::zeroed() };
-        ev.flags = kIsLive as uint16;
-        ev.r#type = kPolyPressureEvent as uint16;
-        ev.__field0.polyPressure = PolyPressureEvent {
-            channel: 0,
-            pitch: i16::from(pitch),
-            pressure: f32::from(pressure) / 127.0,
-            noteId: -1,
-        };
-        ev
-    }
-
-    /// Fill `out` (interleaved, `channels` wide) from the main output bus,
-    /// applying `inputs` at the start. Returns the peak level.
-    fn render(
-        &mut self,
-        out: &mut [f32],
-        channels: usize,
-        inputs: &[Input],
-    ) -> Result<f32, HostError> {
-        out.fill(0.0);
-        if !self.active {
-            return Ok(0.0);
-        }
-        let channels = channels.max(1);
-        let total = out.len() / channels;
-        let mut done = 0;
-        let mut peak = 0.0f32;
-        let mut pending = inputs;
-        while done < total {
-            let frames = (total - done).min(self.max_block);
-            // Inputs land at the start of the first chunk.
-            let notes: Vec<Event> = pending
-                .iter()
-                .filter_map(|i| match *i {
-                    Input::NoteOn { pitch, velocity } => {
-                        Some(Self::note(kNoteOnEvent, pitch, velocity))
-                    }
-                    Input::NoteOff { pitch, velocity } => {
-                        Some(Self::note(kNoteOffEvent, pitch, velocity))
-                    }
-                    Input::PolyPressure { pitch, pressure } => {
-                        Some(Self::pressure(pitch, pressure))
-                    }
-                    Input::Param { .. } => None,
-                })
-                .collect();
-            let params: Vec<(ParamID, ParamValue)> = pending
-                .iter()
-                .filter_map(|i| match *i {
-                    Input::Param { id, value } => Some((id, value)),
-                    _ => None,
-                })
-                .collect();
-            pending = &[];
-            if let Ok(mut e) = self.events.events.lock() {
-                e.clear();
-                e.extend(notes);
-            }
-            self.changes.set(&params);
-
-            let mut in_ptrs: Vec<Vec<*mut f32>> = self
-                .inputs
-                .iter_mut()
-                .map(|bus| {
-                    bus.iter_mut()
-                        .map(|ch| {
-                            ch.fill(0.0);
-                            ch.as_mut_ptr()
-                        })
-                        .collect()
-                })
-                .collect();
-            let mut out_ptrs: Vec<Vec<*mut f32>> = self
-                .outputs
-                .iter_mut()
-                .map(|bus| {
-                    bus.iter_mut()
-                        .map(|ch| {
-                            ch.fill(0.0);
-                            ch.as_mut_ptr()
-                        })
-                        .collect()
-                })
-                .collect();
-            let mut bus = |ptrs: &mut Vec<*mut f32>| AudioBusBuffers {
-                numChannels: ptrs.len() as int32,
-                silenceFlags: 0,
-                __field0: AudioBusBuffers__type0 {
-                    channelBuffers32: ptrs.as_mut_ptr(),
-                },
-            };
-            let mut ins: Vec<AudioBusBuffers> = in_ptrs.iter_mut().map(&mut bus).collect();
-            let mut outs: Vec<AudioBusBuffers> = out_ptrs.iter_mut().map(&mut bus).collect();
-            // SAFETY: ProcessContext is plain data.
-            let mut context: ProcessContext = unsafe { std::mem::zeroed() };
-            context.state = kTempoValid;
-            context.sampleRate = self.sample_rate;
-            context.tempo = 120.0;
-            context.timeSigNumerator = 4;
-            context.timeSigDenominator = 4;
-            let mut data = ProcessData {
-                processMode: kRealtime as int32,
-                symbolicSampleSize: kSample32 as int32,
-                numSamples: frames as int32,
-                numInputs: ins.len() as int32,
-                numOutputs: outs.len() as int32,
-                inputs: if ins.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    ins.as_mut_ptr()
-                },
-                outputs: if outs.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    outs.as_mut_ptr()
-                },
-                inputParameterChanges: if self.changes.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    self.changes_ptr.as_ptr()
-                },
-                outputParameterChanges: std::ptr::null_mut(),
-                inputEvents: self.events_ptr.as_ptr(),
-                outputEvents: std::ptr::null_mut(),
-                processContext: &mut context,
-            };
-            // SAFETY: every buffer pointer refers to a live Vec of max_block
-            // samples, and the event and change lists outlive the call.
-            check("process", unsafe { self.processor.process(&mut data) })?;
-
-            if let Some(main) = self.outputs.first().filter(|b| !b.is_empty()) {
-                for f in 0..frames {
-                    for c in 0..channels {
-                        let sample = main
-                            .get(c % main.len())
-                            .and_then(|ch| ch.get(f))
-                            .copied()
-                            .unwrap_or(0.0);
-                        if let Some(slot) = out.get_mut((done + f) * channels + c) {
-                            *slot = sample;
-                        }
-                        peak = peak.max(sample.abs());
-                    }
-                }
-            }
-            done += frames;
-        }
-        Ok(peak)
-    }
-}
-
-/// VST3's controller number for channel pressure (aftertouch).
-pub const AFTERTOUCH: u16 = 128;
-/// VST3's controller number for pitch bend.
-pub const PITCH_BEND: u16 = 129;
-
-/// Which parameter each MIDI controller drives, as the plugin reports it.
-/// Keys are CC numbers 0-127, [`AFTERTOUCH`] and [`PITCH_BEND`].
-pub type MidiMap = HashMap<u16, u32>;
-
-/// Translate one MIDI message into a plugin input.
-///
-/// Notes and poly pressure become events. Controllers, channel pressure and
-/// pitch bend become parameter changes through `map`; a controller the plugin
-/// does not map is dropped. Every channel is treated alike.
-pub fn midi_to_input(bytes: &[u8], map: &MidiMap) -> Option<Input> {
-    let param = |ctrl: u16, value: f64| {
-        map.get(&ctrl).map(|&id| Input::Param {
-            id,
-            value: value.clamp(0.0, 1.0),
-        })
-    };
-    match *bytes {
-        [s, pitch, velocity] if s & 0xF0 == 0x90 && velocity > 0 => {
-            Some(Input::NoteOn { pitch, velocity })
-        }
-        [s, pitch, velocity] if s & 0xF0 == 0x90 || s & 0xF0 == 0x80 => {
-            Some(Input::NoteOff { pitch, velocity })
-        }
-        [s, pitch, pressure] if s & 0xF0 == 0xA0 => Some(Input::PolyPressure { pitch, pressure }),
-        [s, cc, value] if s & 0xF0 == 0xB0 && cc < 128 => {
-            param(u16::from(cc), f64::from(value) / 127.0)
-        }
-        [s, value, ..] if s & 0xF0 == 0xD0 => param(AFTERTOUCH, f64::from(value) / 127.0),
-        [s, lsb, msb] if s & 0xF0 == 0xE0 => {
-            let bend = (u16::from(msb & 0x7F) << 7) | u16::from(lsb & 0x7F);
-            param(PITCH_BEND, f64::from(bend) / 16383.0)
-        }
-        _ => None,
-    }
-}
-
-/// A handle to a running plugin's audio engine, for an audio thread.
-///
-/// Stop the audio stream that uses this before dropping the [`Plugin`] or
-/// calling [`Plugin::stop_audio`]; after either, `render` writes silence.
-#[derive(Clone)]
-pub struct Audio(Arc<Mutex<Engine>>);
-
-impl Audio {
-    /// Render `out`, interleaved and `channels` wide, applying `inputs` first.
-    /// Returns the peak level.
-    pub fn render(
-        &self,
-        out: &mut [f32],
-        channels: usize,
-        inputs: &[Input],
-    ) -> Result<f32, HostError> {
-        match self.0.lock() {
-            Ok(mut e) => e.render(out, channels, inputs),
-            Err(_) => {
-                out.fill(0.0);
-                Ok(0.0)
-            }
-        }
-    }
-
-    /// The sample rate the engine was set up for.
-    pub fn sample_rate(&self) -> f64 {
-        self.0.lock().map(|e| e.sample_rate).unwrap_or(0.0)
-    }
-}
 
 impl Plugin<'_> {
     /// Hand the plugin its saved state, as opaque bytes, then let the
@@ -654,7 +353,7 @@ impl Plugin<'_> {
     ///
     /// Some plugins apply a loaded state only once their engine runs.
     pub fn start_audio(&mut self, sample_rate: f64, max_block: usize) -> Result<(), HostError> {
-        if self.engine.is_some() {
+        if self.running.is_some() {
             return Ok(());
         }
         let processor = self
@@ -664,37 +363,15 @@ impl Plugin<'_> {
                 call: "IAudioProcessor",
                 code: kNoInterface,
             })?;
-        let mut setup = ProcessSetup {
-            processMode: kRealtime as int32,
-            symbolicSampleSize: kSample32 as int32,
-            maxSamplesPerBlock: max_block as int32,
-            sampleRate: sample_rate,
-        };
-        // SAFETY: plain calls with valid in-parameters.
-        check("setupProcessing", unsafe {
-            processor.setupProcessing(&mut setup)
-        })?;
-
-        let buses = |dir| -> Vec<Vec<Vec<f32>>> {
-            // SAFETY: bus queries into a zeroed POD struct.
-            let n = unsafe { self.component.getBusCount(kAudio as MediaType, dir) };
-            (0..n)
-                .map(|i| {
-                    let mut info: BusInfo = unsafe { std::mem::zeroed() };
-                    unsafe {
-                        self.component
-                            .getBusInfo(kAudio as MediaType, dir, i, &mut info)
-                    };
-                    let channels = usize::try_from(info.channelCount).unwrap_or(0);
-                    vec![vec![0.0f32; max_block]; channels]
-                })
-                .collect()
-        };
-        let inputs = buses(kInput as BusDirection);
-        let outputs = buses(kOutput as BusDirection);
+        let engine =
+            engine::Engine::new(&self.component, processor.clone(), sample_rate, max_block)?;
         // SAFETY: activating buses that exist, then the component.
         unsafe {
-            if !outputs.is_empty() {
+            if self
+                .component
+                .getBusCount(kAudio as MediaType, kOutput as BusDirection)
+                > 0
+            {
                 self.component
                     .activateBus(kAudio as MediaType, kOutput as BusDirection, 0, 1);
             }
@@ -710,62 +387,50 @@ impl Plugin<'_> {
             // Some plugins return kNotImplemented here; that is allowed.
             processor.setProcessing(1);
         }
-        let events = ComWrapper::new(com::EventList::default());
-        let changes = ComWrapper::new(com::ParameterChanges::default());
-        let (Some(events_ptr), Some(changes_ptr)) = (
-            events.to_com_ptr::<IEventList>(),
-            changes.to_com_ptr::<IParameterChanges>(),
-        ) else {
-            return Err(HostError::Call {
-                call: "event lists",
-                code: kNoInterface,
-            });
-        };
-        self.engine = Some(Arc::new(Mutex::new(Engine {
-            processor,
-            sample_rate,
-            max_block,
-            active: true,
-            inputs,
-            outputs,
-            events,
-            events_ptr,
-            changes,
-            changes_ptr,
-        })));
+        self.running = Some((processor, Arc::clone(&engine.state)));
+        self.engine = Some(Box::new(engine));
         Ok(())
     }
 
-    /// A handle an audio thread can render through. `None` until
-    /// [`start_audio`](Self::start_audio).
-    pub fn audio(&self) -> Option<Audio> {
-        self.engine.clone().map(Audio)
+    /// Hand the audio engine to an audio thread. `None` before
+    /// [`start_audio`](Self::start_audio) or once taken.
+    pub fn take_audio(&mut self) -> Option<Audio> {
+        self.engine.take().map(Audio)
     }
 
-    /// Stop the audio engine, if it is running.
+    /// Give a taken engine back, so [`process_block`](Self::process_block)
+    /// works again.
+    pub fn put_audio(&mut self, audio: Audio) {
+        self.engine = Some(audio.0);
+    }
+
+    /// Stop the audio engine, if it is running. Waits for a block in flight
+    /// on the audio thread to finish; after this the engine only renders
+    /// silence and never calls the plugin again.
     pub fn stop_audio(&mut self) {
-        if let Some(engine) = self.engine.take()
-            && let Ok(mut e) = engine.lock()
-        {
-            e.active = false;
-            // SAFETY: the reverse of start_audio.
+        if let Some((processor, state)) = self.running.take() {
+            engine::stop(&state);
+            // SAFETY: the reverse of start_audio, with no block in flight.
             unsafe {
-                e.processor.setProcessing(0);
+                processor.setProcessing(0);
                 self.component.setActive(0);
             }
         }
+        self.engine = None;
     }
 
-    /// Run one block of `frames` with no notes, on the calling thread.
-    /// Returns the output's peak level. For hosts without an audio thread;
-    /// with one, render through [`audio`](Self::audio) instead.
+    /// Run one block of `frames` with no notes, on the calling thread, while
+    /// the engine is not handed to an audio thread. Returns the peak level.
     pub fn process_block(&mut self, frames: usize) -> Result<f32, HostError> {
-        let audio = self.audio().ok_or(HostError::Call {
-            call: "process (engine not started)",
+        let e = self.engine.as_mut().ok_or(HostError::Call {
+            call: "process (engine not started, or taken)",
             code: kNotInitialized,
         })?;
-        let mut scratch = vec![0.0f32; frames * 2];
-        audio.render(&mut scratch, 2, &[])
+        let mut scratch = std::mem::take(&mut e.scratch);
+        let n = (frames * 2).min(scratch.len());
+        let peak = e.render(scratch.get_mut(..n).unwrap_or_default(), 2, &[]);
+        e.scratch = scratch;
+        Ok(peak)
     }
 
     /// The `restartComponent` flags the plugin has raised since the last
@@ -894,77 +559,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
     use super::*;
-
-    #[test]
-    fn midi_becomes_notes_pressure_and_mapped_parameters() {
-        let map: MidiMap = [(1, 100), (64, 101), (AFTERTOUCH, 102), (PITCH_BEND, 103)].into();
-        assert_eq!(
-            midi_to_input(&[0x90, 60, 100], &map),
-            Some(Input::NoteOn {
-                pitch: 60,
-                velocity: 100
-            })
-        );
-        assert_eq!(
-            midi_to_input(&[0x90, 60, 0], &map),
-            Some(Input::NoteOff {
-                pitch: 60,
-                velocity: 0
-            })
-        );
-        assert_eq!(
-            midi_to_input(&[0x83, 60, 40], &map),
-            Some(Input::NoteOff {
-                pitch: 60,
-                velocity: 40
-            })
-        );
-        assert_eq!(
-            midi_to_input(&[0xA0, 60, 90], &map),
-            Some(Input::PolyPressure {
-                pitch: 60,
-                pressure: 90
-            })
-        );
-        assert_eq!(
-            midi_to_input(&[0xB0, 1, 127], &map),
-            Some(Input::Param {
-                id: 100,
-                value: 1.0
-            })
-        );
-        assert_eq!(
-            midi_to_input(&[0xB0, 64, 0], &map),
-            Some(Input::Param {
-                id: 101,
-                value: 0.0
-            })
-        );
-        assert_eq!(
-            midi_to_input(&[0xB0, 7, 64], &map),
-            None,
-            "unmapped controller"
-        );
-        assert_eq!(
-            midi_to_input(&[0xD0, 127], &map),
-            Some(Input::Param {
-                id: 102,
-                value: 1.0
-            })
-        );
-        // Centre bend is 0x2000 of 0x3FFF.
-        let Some(Input::Param { id: 103, value }) = midi_to_input(&[0xE0, 0x00, 0x40], &map) else {
-            panic!("pitch bend")
-        };
-        assert!((value - 8192.0 / 16383.0).abs() < 1e-9);
-        assert_eq!(midi_to_input(&[0xF8], &map), None, "clock is ignored");
-    }
-
-    #[test]
-    fn the_audio_handle_can_go_to_an_audio_thread() {
-        fn send_and_sync<T: Send + Sync>() {}
-        send_and_sync::<Audio>();
-    }
 
     #[test]
     fn an_nks_uid_becomes_a_big_endian_class_id_on_macos() {

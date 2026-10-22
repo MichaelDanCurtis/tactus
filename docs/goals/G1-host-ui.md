@@ -46,6 +46,14 @@ Questions to answer, with a small spike app for each:
 5. **Licence and health.** Apache-2.0 matches ours. Record the version pinned,
    open issues that touch the above, and how active maintenance is.
 
+**When NSH falls short, we extend it.** Owner's decision: if the host
+needs something NSH cannot do (a native child view for plugin windows, say),
+we build it and offer it upstream as a pull request explaining why. Open an
+issue first so Longbridge can say whether they want it and in what shape.
+Keep the change in a fork, pinned, until it is merged. Read their
+contribution terms (CLA or DCO) before the first PR; the licences match
+(Apache-2.0).
+
 **Deliverable:** `docs/research/nsh.md` with the answers, the spike code, and
 a go/no-go. **Gate:** a window from NSH showing live parameter values from a
 running plugin, and the answer to question 1 demonstrated, not inferred.
