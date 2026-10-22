@@ -999,6 +999,7 @@ dependencies = [
  "core-foundation",
  "libloading 0.8.9",
  "tactus-nks",
+ "tactus-odr",
  "thiserror 2.0.21",
  "vst3",
 ]
