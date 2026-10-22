@@ -181,6 +181,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         println!("note    middle C held 1 s: peak {held:.4}; after release: peak {tail:.4}");
     }
+    let map = plugin.midi_map();
+    let mut mapped: Vec<_> = map.iter().collect();
+    mapped.sort();
+    let title = |id: &u32| by_id.get(id).map_or("?", |p| p.title.as_str());
+    let named: Vec<String> = mapped
+        .iter()
+        .filter(|(c, _)| matches!(**c, 1 | 2 | 4 | 7 | 11 | 64 | 128 | 129))
+        .map(|(c, id)| format!("{c}->{}", title(id)))
+        .collect();
+    println!(
+        "midi    {} controllers mapped; {}",
+        map.len(),
+        named.join(", ")
+    );
     let saved = plugin.save_state()?;
     println!(
         "getState gives {} bytes (preset had {}); identical: {}\n",

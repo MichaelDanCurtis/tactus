@@ -18,13 +18,14 @@
 
 mod com;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use vst3::Steinberg::Vst::BusDirections_::{kInput, kOutput};
 use vst3::Steinberg::Vst::Event_::EventFlags_::kIsLive;
-use vst3::Steinberg::Vst::Event_::EventTypes_::{kNoteOffEvent, kNoteOnEvent};
+use vst3::Steinberg::Vst::Event_::EventTypes_::{kNoteOffEvent, kNoteOnEvent, kPolyPressureEvent};
 use vst3::Steinberg::Vst::MediaTypes_::{kAudio, kEvent};
 use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_::kTempoValid;
 use vst3::Steinberg::Vst::ProcessModes_::kRealtime;
@@ -345,6 +346,13 @@ pub enum Input {
         /// MIDI release velocity.
         velocity: u8,
     },
+    /// Pressure on one held key.
+    PolyPressure {
+        /// MIDI note number.
+        pitch: u8,
+        /// Pressure, 0-127.
+        pressure: u8,
+    },
     /// A parameter moved, for example a knob on the keyboard.
     Param {
         /// Parameter id.
@@ -382,6 +390,20 @@ impl Engine {
         ev
     }
 
+    fn pressure(pitch: u8, pressure: u8) -> Event {
+        // SAFETY: Event is plain data; every field used is set below.
+        let mut ev: Event = unsafe { std::mem::zeroed() };
+        ev.flags = kIsLive as uint16;
+        ev.r#type = kPolyPressureEvent as uint16;
+        ev.__field0.polyPressure = PolyPressureEvent {
+            channel: 0,
+            pitch: i16::from(pitch),
+            pressure: f32::from(pressure) / 127.0,
+            noteId: -1,
+        };
+        ev
+    }
+
     /// Fill `out` (interleaved, `channels` wide) from the main output bus,
     /// applying `inputs` at the start. Returns the peak level.
     fn render(
@@ -410,6 +432,9 @@ impl Engine {
                     }
                     Input::NoteOff { pitch, velocity } => {
                         Some(Self::note(kNoteOffEvent, pitch, velocity))
+                    }
+                    Input::PolyPressure { pitch, pressure } => {
+                        Some(Self::pressure(pitch, pressure))
                     }
                     Input::Param { .. } => None,
                 })
@@ -516,6 +541,47 @@ impl Engine {
             done += frames;
         }
         Ok(peak)
+    }
+}
+
+/// VST3's controller number for channel pressure (aftertouch).
+pub const AFTERTOUCH: u16 = 128;
+/// VST3's controller number for pitch bend.
+pub const PITCH_BEND: u16 = 129;
+
+/// Which parameter each MIDI controller drives, as the plugin reports it.
+/// Keys are CC numbers 0-127, [`AFTERTOUCH`] and [`PITCH_BEND`].
+pub type MidiMap = HashMap<u16, u32>;
+
+/// Translate one MIDI message into a plugin input.
+///
+/// Notes and poly pressure become events. Controllers, channel pressure and
+/// pitch bend become parameter changes through `map`; a controller the plugin
+/// does not map is dropped. Every channel is treated alike.
+pub fn midi_to_input(bytes: &[u8], map: &MidiMap) -> Option<Input> {
+    let param = |ctrl: u16, value: f64| {
+        map.get(&ctrl).map(|&id| Input::Param {
+            id,
+            value: value.clamp(0.0, 1.0),
+        })
+    };
+    match *bytes {
+        [s, pitch, velocity] if s & 0xF0 == 0x90 && velocity > 0 => {
+            Some(Input::NoteOn { pitch, velocity })
+        }
+        [s, pitch, velocity] if s & 0xF0 == 0x90 || s & 0xF0 == 0x80 => {
+            Some(Input::NoteOff { pitch, velocity })
+        }
+        [s, pitch, pressure] if s & 0xF0 == 0xA0 => Some(Input::PolyPressure { pitch, pressure }),
+        [s, cc, value] if s & 0xF0 == 0xB0 && cc < 128 => {
+            param(u16::from(cc), f64::from(value) / 127.0)
+        }
+        [s, value, ..] if s & 0xF0 == 0xD0 => param(AFTERTOUCH, f64::from(value) / 127.0),
+        [s, lsb, msb] if s & 0xF0 == 0xE0 => {
+            let bend = (u16::from(msb & 0x7F) << 7) | u16::from(lsb & 0x7F);
+            param(PITCH_BEND, f64::from(bend) / 16383.0)
+        }
+        _ => None,
     }
 }
 
@@ -722,6 +788,24 @@ impl Plugin<'_> {
             .unwrap_or_default()
     }
 
+    /// Ask the plugin which parameter each MIDI controller drives (bus 0,
+    /// channel 0). Empty when the plugin has no MIDI mapping.
+    pub fn midi_map(&self) -> MidiMap {
+        let Some(mapping) = self.controller.cast::<IMidiMapping>() else {
+            return MidiMap::new();
+        };
+        (0..=PITCH_BEND)
+            .filter_map(|ctrl| {
+                let mut id: ParamID = 0;
+                // SAFETY: out-parameter ParamID.
+                let code = unsafe {
+                    mapping.getMidiControllerAssignment(0, 0, ctrl as CtrlNumber, &mut id)
+                };
+                (code == kResultOk).then_some((ctrl, id))
+            })
+            .collect()
+    }
+
     /// Whether the controller is a separate object from the processor, joined
     /// by connection points.
     pub fn separate_controller(&self) -> bool {
@@ -810,6 +894,71 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
     use super::*;
+
+    #[test]
+    fn midi_becomes_notes_pressure_and_mapped_parameters() {
+        let map: MidiMap = [(1, 100), (64, 101), (AFTERTOUCH, 102), (PITCH_BEND, 103)].into();
+        assert_eq!(
+            midi_to_input(&[0x90, 60, 100], &map),
+            Some(Input::NoteOn {
+                pitch: 60,
+                velocity: 100
+            })
+        );
+        assert_eq!(
+            midi_to_input(&[0x90, 60, 0], &map),
+            Some(Input::NoteOff {
+                pitch: 60,
+                velocity: 0
+            })
+        );
+        assert_eq!(
+            midi_to_input(&[0x83, 60, 40], &map),
+            Some(Input::NoteOff {
+                pitch: 60,
+                velocity: 40
+            })
+        );
+        assert_eq!(
+            midi_to_input(&[0xA0, 60, 90], &map),
+            Some(Input::PolyPressure {
+                pitch: 60,
+                pressure: 90
+            })
+        );
+        assert_eq!(
+            midi_to_input(&[0xB0, 1, 127], &map),
+            Some(Input::Param {
+                id: 100,
+                value: 1.0
+            })
+        );
+        assert_eq!(
+            midi_to_input(&[0xB0, 64, 0], &map),
+            Some(Input::Param {
+                id: 101,
+                value: 0.0
+            })
+        );
+        assert_eq!(
+            midi_to_input(&[0xB0, 7, 64], &map),
+            None,
+            "unmapped controller"
+        );
+        assert_eq!(
+            midi_to_input(&[0xD0, 127], &map),
+            Some(Input::Param {
+                id: 102,
+                value: 1.0
+            })
+        );
+        // Centre bend is 0x2000 of 0x3FFF.
+        let Some(Input::Param { id: 103, value }) = midi_to_input(&[0xE0, 0x00, 0x40], &map) else {
+            panic!("pitch bend")
+        };
+        assert!((value - 8192.0 / 16383.0).abs() < 1e-9);
+        assert_eq!(midi_to_input(&[0xF8], &map), None, "clock is ignored");
+    }
 
     #[test]
     fn the_audio_handle_can_go_to_an_audio_thread() {

@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -24,7 +25,8 @@ use tactus_nks::{Preset, artwork};
 use tactus_odr::events::{self, Event};
 use tactus_odr::{Client, Knob, KnobSection, ParameterPage, Registry, Rgb};
 use tactus_plugin_host::{
-    Audio, Input, Module, PARAM_VALUES_CHANGED, Plugin, class_id, pump_main_run_loop,
+    Audio, Input, MidiMap, Module, PARAM_VALUES_CHANGED, Plugin, class_id, midi_to_input,
+    pump_main_run_loop,
 };
 
 const SERIAL: &str = "99FE7169";
@@ -209,19 +211,6 @@ fn output_rate() -> Option<f64> {
     Some(f64::from(config.sample_rate()))
 }
 
-/// Translate one MIDI message from the keys into a plugin input.
-fn note(bytes: &[u8]) -> Option<Input> {
-    match *bytes {
-        [status, pitch, velocity] if status & 0xF0 == 0x90 && velocity > 0 => {
-            Some(Input::NoteOn { pitch, velocity })
-        }
-        [status, pitch, velocity] if status & 0xF0 == 0x90 || status & 0xF0 == 0x80 => {
-            Some(Input::NoteOff { pitch, velocity })
-        }
-        _ => None,
-    }
-}
-
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut path = args
@@ -269,19 +258,27 @@ fn main() -> Result<(), String> {
         }
         Err(err) => println!("audio: {err}; running silent"),
     }
+    // Which parameter each wheel, pedal and controller drives. Refreshed after
+    // every preset load, since a preset can change it.
+    let midi_map: Arc<Mutex<MidiMap>> = Arc::new(Mutex::new(plugin.midi_map()));
+    if let Ok(m) = midi_map.lock() {
+        println!("midi: {} controllers mapped by the plugin", m.len());
+    }
     // Keys on their own thread, straight to the audio engine: nothing else
     // may sit between a key and the sound.
     match MidiIn::open(PortRole::Main, tactus_io::KONTROL_FILTER) {
         Ok(keys) => {
             println!("keys: {}", keys.identity().display_name());
             let tx = tx.clone();
+            let map = Arc::clone(&midi_map);
             std::thread::spawn(move || {
                 let mut first = true;
                 loop {
                     let Some(bytes) = keys.recv_timeout(Duration::from_secs(1)) else {
                         continue;
                     };
-                    if let Some(input) = note(&bytes) {
+                    let input = map.lock().ok().and_then(|m| midi_to_input(&bytes, &m));
+                    if let Some(input) = input {
                         if first {
                             first = false;
                             println!("first note: {input:?}");
@@ -365,6 +362,9 @@ fn main() -> Result<(), String> {
                                         path = p;
                                         preset = np;
                                         headers = publish(&mut client, &plugin, &preset)?;
+                                        if let Ok(mut m) = midi_map.lock() {
+                                            *m = plugin.midi_map();
+                                        }
                                     }
                                     Err(err) => println!("{} {}: {err}", stamp(start), p.display()),
                                 }
