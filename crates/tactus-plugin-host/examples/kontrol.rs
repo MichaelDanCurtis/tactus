@@ -176,10 +176,17 @@ fn open_output(audio: Audio, rx: Receiver<Input>) -> Result<cpal::Stream, String
         ));
     }
     let channels = usize::from(config.channels());
+    // A small buffer keeps keys-to-sound latency down: 256 frames is about
+    // 5 ms at 48 kHz. Fall back to the device's default if it refuses.
+    let mut stream_config = config.config();
+    if let cpal::SupportedBufferSize::Range { min, max } = *config.buffer_size() {
+        stream_config.buffer_size = cpal::BufferSize::Fixed(256u32.clamp(min, max));
+    }
+    println!("audio: buffer {:?}", stream_config.buffer_size);
     let mut pending: Vec<Input> = Vec::with_capacity(256);
     device
         .build_output_stream(
-            config.config(),
+            stream_config,
             move |data: &mut [f32], _| {
                 pending.clear();
                 while let Ok(i) = rx.try_recv() {
@@ -262,12 +269,30 @@ fn main() -> Result<(), String> {
         }
         Err(err) => println!("audio: {err}; running silent"),
     }
-    let keys = MidiIn::open(PortRole::Main, tactus_io::KONTROL_FILTER);
-    match &keys {
-        Ok(k) => println!("keys: {}", k.identity().display_name()),
+    // Keys on their own thread, straight to the audio engine: nothing else
+    // may sit between a key and the sound.
+    match MidiIn::open(PortRole::Main, tactus_io::KONTROL_FILTER) {
+        Ok(keys) => {
+            println!("keys: {}", keys.identity().display_name());
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let mut first = true;
+                loop {
+                    let Some(bytes) = keys.recv_timeout(Duration::from_secs(1)) else {
+                        continue;
+                    };
+                    if let Some(input) = note(&bytes) {
+                        if first {
+                            first = false;
+                            println!("first note: {input:?}");
+                        }
+                        let _ = tx.try_send(input);
+                    }
+                }
+            });
+        }
         Err(err) => println!("keys: {err}"),
     }
-    let mut played = false;
     let secs = load(&mut plugin, &mut clock, &preset)?;
     println!("{name}: {} loaded in {secs:.2}s", preset.info.name);
 
@@ -296,17 +321,6 @@ fn main() -> Result<(), String> {
     let stamp = |t: Instant| format!("[{:6.2}s]", t.elapsed().as_secs_f32());
     while start.elapsed() < Duration::from_secs(seconds) {
         clock.tick(&mut plugin);
-        if let Ok(keys) = &keys {
-            while let Some(bytes) = keys.try_recv() {
-                if let Some(input) = note(&bytes) {
-                    if !played {
-                        played = true;
-                        println!("{} first note: {input:?}", stamp(start));
-                    }
-                    let _ = tx.try_send(input);
-                }
-            }
-        }
         for n in client.listen(Duration::from_millis(5)).map_err(e)? {
             for event in events::decode(client.registry(), &n) {
                 match event {

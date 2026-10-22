@@ -302,6 +302,9 @@ pub struct Knob<'a> {
     pub display: &'a str,
 }
 
+/// How long one socket read waits for the agent by default.
+const READ_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// The most knobs one NKS1 section can place.
 pub const KNOBS_PER_SECTION: usize = 8;
 
@@ -579,7 +582,7 @@ impl Client {
             source,
         })?;
         stream
-            .set_read_timeout(Some(Duration::from_millis(250)))
+            .set_read_timeout(Some(READ_TIMEOUT))
             .map_err(|source| OdrError::Io {
                 op: "set_read_timeout",
                 source,
@@ -1049,12 +1052,30 @@ impl Client {
     /// Collect notifications for a fixed window, for observing the agent.
     pub fn listen(&mut self, window: Duration) -> Result<Vec<Notification>, OdrError> {
         let deadline = Instant::now() + window;
-        while Instant::now() < deadline {
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            // A read must not outlast the window. Without this a 5 ms listen
+            // blocked for the socket's full READ_TIMEOUT whenever the agent
+            // was quiet, and a host polling between listens lagged by that.
+            self.set_wait(left.clamp(Duration::from_millis(1), READ_TIMEOUT))?;
             if let Some(frame) = self.read_frame()? {
                 let _ = self.classify(frame, u32::MAX);
             }
         }
+        self.set_wait(READ_TIMEOUT)?;
         Ok(self.drain_notifications())
+    }
+
+    fn set_wait(&self, wait: Duration) -> Result<(), OdrError> {
+        self.stream
+            .set_read_timeout(Some(wait))
+            .map_err(|source| OdrError::Io {
+                op: "set_read_timeout",
+                source,
+            })
     }
 
     fn classify(&mut self, frame: Value, want: u32) -> Classified {
