@@ -128,7 +128,9 @@ fn main() -> Result<(), OdrError> {
     // device-management methods. It is what turns on the display API.
     println!("\ninstance_hello (instance {}):", client.instance_id());
     match client.instance_hello("tactus-pilot", "2.2.0") {
-        Ok(_) => println!("  accepted — the display API is now registered"),
+        // Answered is not the same as registered; the agent can reply and
+        // still not enter us into its instance manager.
+        Ok(_) => println!("  answered (NOT proof of registration — see docs)"),
         Err(e) => {
             println!("  {e}");
             return Ok(());
@@ -144,7 +146,7 @@ fn main() -> Result<(), OdrError> {
     // The smallest host-supplied thing that can appear on the screen.
     println!("\nsend_global_notification \"hello from tactus\":");
     match client.notification(&serial, "hello from tactus") {
-        Ok(()) => println!("  sent — accepted without error"),
+        Ok(()) => println!("  sent (the agent's own log is what says whether it worked)"),
         Err(e) => println!("  {e}"),
     }
 
@@ -152,7 +154,7 @@ fn main() -> Result<(), OdrError> {
     if let Some(page) = client.registry().id("browser") {
         println!("\nclient_set_page -> browser ({page}):");
         match client.set_page(&serial, page) {
-            Ok(()) => println!("  sent — accepted without error"),
+            Ok(()) => println!("  sent (the agent's own log is what says whether it worked)"),
             Err(e) => println!("  {e}"),
         }
     }

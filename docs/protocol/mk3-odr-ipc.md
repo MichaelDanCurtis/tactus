@@ -249,6 +249,99 @@ written into `mk3-midi-mode.md`: read the source of truth first. Static
 analysis gave a definite answer in three queries after name-guessing had
 burned three rounds on a wrong lead.
 
+## Correction: `instance_hello` is **not** solved
+
+The section above claimed it was. That was wrong, and two measurement errors
+of mine produced it. Both are worth recording, because they are the kind that
+manufacture a positive result.
+
+**Error 1 — matching a reply without checking its id.** The acceptance test was
+
+```python
+any(o[0] == 1 and not o[2] for o in replies)   # WRONG
+```
+
+The agent sends an unsolicited greeting shaped `[1, 0, nil, {...}]` on
+connect. That satisfies the predicate. So "handshake OK" was reading the
+*greeting*, not a response to the request — for any payload whatsoever. The
+check must compare the msgid against the one sent.
+
+**Error 2 — reading the log before the agent wrote to it.** Errors were
+sampled ~0.4 s after each send, and the agent's warnings often land later. A
+run reported "14 clean, 16 errors" where all 30 almost certainly failed; an
+earlier single probe reported "CLEAN" on the same basis. **Any "clean" result
+in this project obtained by a short log window should be distrusted.**
+
+**Consequently retracted:** that `is_host: false` makes registration succeed.
+That conclusion came from an oracle — absence of `client not found` in a short
+window — which also reported success for a payload whose handshake had
+explicitly failed to parse. A self-contradicting oracle proves nothing.
+
+### What the log actually shows
+
+Across the whole session, `IPC: instance_hello` appears **three** times:
+
+```text
+18:45:05 [trace] IPC: instance_hello - 01375f44-…, client version 2.2.0, server version 2.1.0
+18:55:40 [error] IPC: instance_hello received, but instance already present (0f8f323c-…)
+18:55:43 [error] IPC: instance_hello received, but instance already present (0f8f323c-…)
+```
+
+The first is the vendor's own client. The other two are ours, reaching the
+handler and being refused because instance `0f8f323c` was already registered —
+which means **one** earlier attempt did register, and the agent kept that
+registration after its socket closed.
+
+Every later attempt produced **no handler line at all**, while still drawing a
+reply. So the reply is not coming from this handler, and the registration is
+not happening. Downstream, that is exactly what the failures say:
+
+```text
+send_global_notification failed: no such device <our-instance-uuid>
+instance_manager::get_instance_client cannot find identity 99FE7169
+instance_manager::handle_instance_goodbye: client not found <our-instance-uuid>
+```
+
+`no such device` naming *our instance uuid* is the giveaway: the agent is
+resolving that argument through `instance_manager` and finding nothing,
+because we were never entered into it.
+
+### Next step, and what not to repeat
+
+1. Match replies by msgid, strictly, and re-establish which payloads the
+   handler actually answers. Every "accepted" claim in this project predates
+   that fix and needs re-testing.
+2. Read the log after a settled delay, or tail it continuously, rather than
+   sampling.
+3. Then find why the handler is bypassed: decompile the dispatch path that
+   answers a request without logging, around
+   `register_rpc_instance_handling()::$_30` at `0x10023336c`.
+
+## What *is* solid
+
+Independently repeatable, and not dependent on either faulty oracle:
+
+- The **16-byte UUID prelude**. Confirmed by the agent echoing the exact UUID
+  back in `remove_connection`, and by frames being parsed at all once sent.
+- **Framing and RPC forms** — length-prefixed msgpack, `[0,id,m,p]` /
+  `[1,id,err,res]` / `[2,m,p]`.
+- **`get_devices` and `get_device_settings`**, which return real values from
+  the hardware, repeatably, with the reply id matching the request.
+- The **symbol registry**, 389 entries, as sent by the agent itself.
+- **Method names and arities**, from the `args_to_tuple size mismatch` oracle,
+  which states the expected count outright rather than being inferred.
+- The **notification payload schema**, which the agent enumerated by name:
+
+  ```text
+  notification: { level, title, description, url_message, url, blocking_state }
+  ```
+
+  Obtained from `expected key missing: …` warnings, one per field — an oracle
+  that names what it wants instead of requiring a guess.
+
+**Nothing has been displayed on the device.** No run has been visually
+confirmed, and the agent's own logs show the writes failing.
+
 ## Call signatures
 
 **Evidence class: host observation.** Arity came from a third log oracle,

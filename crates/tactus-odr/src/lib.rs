@@ -444,12 +444,26 @@ impl Client {
                 ),
             ]),
         ];
+        // `call_named` matches the reply by msgid, so a success here is a real
+        // answer to this request -- not the unsolicited connect greeting,
+        // which is also shaped `[1, id, nil, {...}]` and fooled an earlier
+        // version of this check.
+        //
+        // Note: a successful reply does **not** prove the agent registered
+        // this client. The vendor's own log is the only confirmation of that,
+        // and registration is currently unresolved -- see
+        // docs/protocol/mk3-odr-ipc.md. `is_identified` therefore means "the
+        // handshake was answered", not "the display API will work".
         let reply = self.call_named("instance_hello", args, Duration::from_secs(3))?;
         self.identified = true;
         Ok(reply)
     }
 
-    /// Whether [`Client::instance_hello`] has succeeded on this connection.
+    /// Whether [`Client::instance_hello`] was *answered* on this connection.
+    ///
+    /// Deliberately not named "registered": the agent answers the handshake
+    /// without necessarily entering the client into its instance manager, and
+    /// the display calls fail on that lookup. See the crate docs.
     pub fn is_identified(&self) -> bool {
         self.identified
     }
