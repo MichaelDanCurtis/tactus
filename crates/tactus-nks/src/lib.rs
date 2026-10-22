@@ -34,6 +34,8 @@
     clippy::indexing_slicing
 )]
 
+pub mod artwork;
+
 use std::path::Path;
 
 use rmpv::Value;

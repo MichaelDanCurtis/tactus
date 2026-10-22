@@ -1,6 +1,7 @@
 //! Show an NKS preset on the MK3: its plugin name, every knob page with the
 //! preset's own section headers and labels, and knobs that turn. The preset
-//! up/down buttons step through the other presets in the same folder.
+//! up/down buttons step through the other presets in the same folder. When
+//! the product ships a hardware banner, it is shown above the knobs.
 //!
 //! ```text
 //! TACTUS_ODR_REGISTRY=/path/to/symbol_registry.json \
@@ -15,10 +16,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use tactus_nks::Preset;
+use tactus_nks::{Preset, artwork};
 use tactus_odr::events::{self, Event};
 use tactus_odr::{
-    Client, Control, HostState, Knob, KnobSection, OdrError, Record, Registry, Transport,
+    Client, Control, HostState, Knob, KnobSection, OdrError, ParameterPage, Record, Registry,
+    Transport,
 };
 
 const SERIAL: &str = "99FE7169";
@@ -92,13 +94,39 @@ fn show(client: &mut Client, preset: &Preset) -> Result<Shown, OdrError> {
             preset_name: &preset.info.name,
         },
     )?;
-    client.set_parameter_layout(SERIAL, &plugin, &layout, 0)?;
+    // The banner for the preset's product, if it ships one.
+    let banner = preset.info.bankchain.first().and_then(|product| {
+        artwork::hardware_banner(Path::new(artwork::MAC_RESOURCE_ROOT), product)
+    });
+    let background = match &banner {
+        Some(path) => match std::fs::read(path) {
+            Ok(image) => Some(client.add_asset(&image)?),
+            Err(e) => {
+                eprintln!("{}: {e}", path.display());
+                None
+            }
+        },
+        None => None,
+    };
+    client.publish_parameter_page(
+        SERIAL,
+        &ParameterPage {
+            plugin_name: &plugin,
+            pages: &layout,
+            show_page: 0,
+            background,
+        },
+    )?;
     println!(
         "\n{} — {plugin}, {} pages, {} bytes of plugin state left untouched",
         preset.info.name,
         layout.len(),
         preset.state_len
     );
+    match &banner {
+        Some(path) => println!("banner: {}", path.display()),
+        None => println!("banner: none for this product"),
+    }
     Ok(Shown { values, headers })
 }
 

@@ -308,6 +308,82 @@ pub const KNOBS_PER_SECTION: usize = 8;
 /// The most pages an NKS1 layout can address: the view address is a byte.
 pub const MAX_PAGES: usize = 256;
 
+/// An image in the agent's asset store, addressed by the SHA-256 of its bytes.
+///
+/// Exactly 32 bytes by construction, and only made by hashing an image. The
+/// agent deserialises a handle into a fixed 32-byte type and **aborts the whole
+/// service** on any other shape, so a handle is never built from untyped input.
+/// See `docs/protocol/mk3-odr-ipc.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AssetHandle([u8; 32]);
+
+impl AssetHandle {
+    /// The handle of these image bytes.
+    pub fn of(image: &[u8]) -> Self {
+        use sha2::{Digest, Sha256};
+        Self(Sha256::digest(image).into())
+    }
+
+    /// The 32 bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    fn to_value(self) -> Value {
+        Value::Binary(self.0.to_vec())
+    }
+}
+
+/// Largest image [`Client::add_asset`] will send. A 1280x212 header banner is
+/// typically under 300 KB.
+pub const MAX_ASSET_BYTES: usize = 4 * 1024 * 1024;
+
+/// An image format the agent decodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFormat {
+    /// PNG.
+    Png,
+    /// WebP, lossy or lossless.
+    WebP,
+}
+
+impl ImageFormat {
+    /// Recognise an image by its signature.
+    pub fn sniff(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Some(Self::Png)
+        } else if bytes.get(0..4) == Some(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+            Some(Self::WebP)
+        } else {
+            None
+        }
+    }
+}
+
+/// Check an image before it goes to the agent.
+fn check_image(image: &[u8]) -> Result<ImageFormat, OdrError> {
+    if image.len() > MAX_ASSET_BYTES {
+        return Err(OdrError::Decode(format!(
+            "image is {} bytes, over the {MAX_ASSET_BYTES}-byte limit",
+            image.len()
+        )));
+    }
+    ImageFormat::sniff(image).ok_or_else(|| OdrError::Decode("not a PNG or WebP image".into()))
+}
+
+/// Everything one parameter-page publish carries.
+#[derive(Debug, Clone)]
+pub struct ParameterPage<'a> {
+    /// The name across the top of the screen.
+    pub plugin_name: &'a str,
+    /// The NKS1 layout: pages, each a run of sections.
+    pub pages: &'a [Vec<KnobSection<'a>>],
+    /// The page to show, counting from 0.
+    pub show_page: usize,
+    /// Header image, from [`Client::add_asset`]. `None` draws none.
+    pub background: Option<AssetHandle>,
+}
+
 /// A section header over a run of knob slots, as an NKS1 page shows it.
 ///
 /// A page is a list of these; its slots together fill at most eight knobs.
@@ -746,9 +822,42 @@ impl Client {
         pages: &[Vec<KnobSection<'_>>],
         show_page: usize,
     ) -> Result<(), OdrError> {
-        let body = parameter_page_body(plugin_name, pages, show_page)?;
+        self.publish_parameter_page(
+            serial,
+            &ParameterPage {
+                plugin_name,
+                pages,
+                show_page,
+                background: None,
+            },
+        )
+    }
+
+    /// Publish a parameter page, header image included.
+    pub fn publish_parameter_page(
+        &mut self,
+        serial: &str,
+        page: &ParameterPage<'_>,
+    ) -> Result<(), OdrError> {
+        let body = parameter_page_body(page)?;
         let args = self.device_args(serial, vec![body]);
         self.notify_symbol("client_parameter_page_set_data", args)
+    }
+
+    /// Store an image in the agent's asset store and return its handle.
+    ///
+    /// The image must be PNG or WebP; the agent decodes it. The store is
+    /// content-addressed and outlives the connection, so sending the same
+    /// image again is harmless. A notification, not a request: the agent
+    /// answers `Method not registered` if it is sent as a request.
+    pub fn add_asset(&mut self, image: &[u8]) -> Result<AssetHandle, OdrError> {
+        check_image(image)?;
+        let handle = AssetHandle::of(image);
+        self.notify_symbol(
+            "add_asset",
+            vec![handle.to_value(), Value::Binary(image.to_vec())],
+        )?;
+        Ok(handle)
     }
 
     /// Update one knob's value on the published parameter page.
@@ -1041,11 +1150,13 @@ fn map(pairs: Vec<(&str, Value)>) -> Value {
 
 /// Build the `client_parameter_page_set_data` body. Kept apart from the
 /// socket so its shape can be tested.
-fn parameter_page_body(
-    plugin_name: &str,
-    pages: &[Vec<KnobSection<'_>>],
-    show_page: usize,
-) -> Result<Value, OdrError> {
+fn parameter_page_body(page: &ParameterPage<'_>) -> Result<Value, OdrError> {
+    let ParameterPage {
+        plugin_name,
+        pages,
+        show_page,
+        background,
+    } = *page;
     if pages.len() > MAX_PAGES {
         return Err(OdrError::Decode(format!(
             "{} pages given; an NKS1 view address selects at most {MAX_PAGES}",
@@ -1157,7 +1268,10 @@ fn parameter_page_body(
             "plugin_data",
             map(vec![
                 ("name", s(plugin_name)),
-                ("background", Value::Nil),
+                (
+                    "background",
+                    background.map_or(Value::Nil, AssetHandle::to_value),
+                ),
                 ("parameters", parameters),
                 ("plugin_color", rgb(40, 110, 230)),
                 ("nks_control_color", rgb(40, 110, 230)),
@@ -1194,6 +1308,66 @@ mod tests {
         }
     }
 
+    fn page<'a>(
+        plugin_name: &'a str,
+        pages: &'a [Vec<KnobSection<'a>>],
+        show_page: usize,
+        background: Option<AssetHandle>,
+    ) -> ParameterPage<'a> {
+        ParameterPage {
+            plugin_name,
+            pages,
+            show_page,
+            background,
+        }
+    }
+
+    #[test]
+    fn an_asset_handle_is_the_sha256_of_the_image() {
+        // FIPS 180-2 test vector for "abc".
+        let h = AssetHandle::of(b"abc");
+        assert_eq!(
+            h.as_bytes()[..4],
+            [0xba, 0x78, 0x16, 0xbf],
+            "sha256(abc) starts ba7816bf"
+        );
+        assert_eq!(h.as_bytes()[28..], [0xf2, 0x00, 0x15, 0xad]);
+        assert!(matches!(h.to_value(), Value::Binary(b) if b.len() == 32));
+    }
+
+    #[test]
+    fn only_png_and_webp_are_sent() {
+        assert_eq!(
+            ImageFormat::sniff(b"\x89PNG\r\n\x1a\nrest"),
+            Some(ImageFormat::Png)
+        );
+        assert_eq!(
+            ImageFormat::sniff(b"RIFF\0\0\0\0WEBPVP8L"),
+            Some(ImageFormat::WebP)
+        );
+        assert_eq!(ImageFormat::sniff(b"RIFF\0\0\0\0WAVEfmt "), None);
+        assert_eq!(ImageFormat::sniff(b"GIF89a"), None);
+        assert!(check_image(b"not an image").is_err());
+        let mut big = b"\x89PNG\r\n\x1a\n".to_vec();
+        big.resize(MAX_ASSET_BYTES + 1, 0);
+        assert!(check_image(&big).is_err());
+    }
+
+    #[test]
+    fn a_background_is_sent_as_its_32_byte_handle() {
+        let section = KnobSection {
+            name: "One",
+            knobs: vec![Some(knob(1, "A"))],
+        };
+        let pages = [vec![section]];
+        let h = AssetHandle::of(b"\x89PNG\r\n\x1a\n");
+        let body = parameter_page_body(&page("x", &pages, 0, Some(h))).unwrap();
+        let bg = get(get(&body, "plugin_data"), "background");
+        assert!(matches!(bg, Value::Binary(b) if b.as_slice() == h.as_bytes()));
+        let body = parameter_page_body(&page("x", &pages, 0, None)).unwrap();
+        assert!(get(get(&body, "plugin_data"), "background").is_nil());
+    }
+
     #[test]
     fn a_layout_carries_every_page_its_sections_and_empty_slots() {
         let pages = vec![
@@ -1212,7 +1386,7 @@ mod tests {
                 knobs: vec![Some(knob(0, "Volume"))],
             }],
         ];
-        let body = parameter_page_body("Super 8", &pages, 1).unwrap();
+        let body = parameter_page_body(&page("Super 8", &pages, 1, None)).unwrap();
 
         let layout = get(get(&body, "host_owned_viewstate"), "nks1_layout");
         let Value::Array(layout) = layout else {
@@ -1246,7 +1420,7 @@ mod tests {
                 knobs: vec![Some(knob(7, "Cutoff"))],
             }],
         ];
-        let body = parameter_page_body("x", &pages, 0).unwrap();
+        let body = parameter_page_body(&page("x", &pages, 0, None)).unwrap();
         let Value::Map(params) = get(get(&body, "plugin_data"), "parameters") else {
             panic!("parameters is not a map")
         };
@@ -1259,7 +1433,7 @@ mod tests {
             name: "Too many",
             knobs: vec![None; KNOBS_PER_SECTION + 1],
         };
-        assert!(parameter_page_body("x", &[vec![section]], 0).is_err());
+        assert!(parameter_page_body(&page("x", &[vec![section]], 0, None)).is_err());
     }
 
     #[test]
@@ -1268,9 +1442,9 @@ mod tests {
             name: "One",
             knobs: vec![Some(knob(1, "A"))],
         };
-        assert!(parameter_page_body("x", &[vec![section]], 1).is_err());
+        assert!(parameter_page_body(&page("x", &[vec![section]], 1, None)).is_err());
         // An empty layout is valid, showing page 0.
-        assert!(parameter_page_body("x", &[], 0).is_ok());
+        assert!(parameter_page_body(&page("x", &[], 0, None)).is_ok());
     }
 
     #[test]

@@ -1011,3 +1011,32 @@ Loading the next preset is just a new layout sent with view address 0, so the
 new preset opens on its first page, as the owner observed. Stepping through
 dozens of presets in a few seconds produced no agent warnings.
 
+
+## CONFIRMED: a header image from the product's own banner
+
+**Evidence class: hardware observation, confirmed by the device's owner.**
+S88 MK3, agent `2.0.7 (R15)`, Komplete Kontrol closed.
+
+```text
+notify add_asset [ <32-byte bin: sha256(image)>, <bin: image bytes> ]
+client_parameter_page_set_data … plugin_data.background: <the same 32-byte bin>
+```
+
+- `add_asset` takes two arguments on this agent, as on 2.1.5. It logged
+  nothing, and the agent kept running (same process, no crash report).
+- The image was the product's own `NKS2_hardware_banner.webp` (WebP lossless,
+  1280x212), found through `PAResources/image/<product>/`. The owner saw it
+  across the full width of the screen, at the usual header height, with the
+  knobs and labels drawn beneath it by the device.
+- Stepping presets re-sent the page each time. The banner stayed in place.
+
+`tactus-odr` types the handle as `AssetHandle([u8; 32])`, made only by hashing
+an image, and checks the PNG/WebP signature and a 4 MiB cap before sending.
+A handle of the wrong shape aborts the agent, so it is never built from
+untyped input.
+
+**The image covers the header only.** The agent accepts five `plugin_data`
+fields: `name`, `background`, `parameters`, `plugin_color`,
+`nks_control_color`. The knob area is drawn by the device. The registry's
+other `image` symbol belongs to menu-parameter entries (`menu`, `index`,
+`num_values`, `image`). It is not a page background.

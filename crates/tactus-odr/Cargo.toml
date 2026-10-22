@@ -8,6 +8,7 @@ description = "Client for Native Instruments' ODR agent, the host-mode channel f
 
 [dependencies]
 rmpv = "1.3"
+sha2 = "0.10"
 thiserror = "2"
 
 [dev-dependencies]
