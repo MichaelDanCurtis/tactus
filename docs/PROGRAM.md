@@ -138,6 +138,46 @@ Consumes A, and later B. Shippable and genuinely useful **before** B exists: a f
 quiet host that drives the keyboard and talks to a DAW beats the incumbent for a lot of
 real use even with no plugin hosting at all.
 
+### E. Direction — owner's vision, 2026-10-22
+
+Two standards and two products.
+
+**Standards.**
+
+- **CLAP** for software interoperability. CLAP itself already exists (Bitwig
+  and u-he, 2022, MIT). The aim is to be the first host that brings NKS-class
+  hardware to CLAP plugins, which NI's own software does not.
+- **NAP** (working name; check it is free before publishing), a hardware
+  interface standard. It works with NKS hardware and presets in both
+  directions, and bridges UMP / MIDI 2.0, Dante, AVB, MIDI over IP and OSC.
+  Further out: reading CV from audio channels, to talk to modular gear.
+
+"NKS" is NI's trademark. Without an agreement with NI (and there will be
+none), describe interoperability plainly ("works with NKS presets") and brand
+nothing as NKS.
+
+**Products: one core, two flavours.**
+
+1. **Shim mode.** Ultra-thin: just enough to put one VST3 / AU (later CLAP)
+   plugin on the keyboard, inside a DAW such as Ableton. Architecturally it is
+   a **plugin that hosts a plugin**. The DAW loads the shim, the shim loads the
+   instrument, passes audio and MIDI through, and drives the keyboard's screen,
+   knobs and lights. KK's own plugin works the same way. Today's
+   `tactus-plugin-host` plus `tactus-odr` are most of its insides. What is
+   missing is the outer plugin wrapper and running inside a DAW's threads.
+2. **Full mode.** A routing and translation environment, run once as a
+   background service: UMP / MIDI 2.0, Dante, AVB, MIDI over IP and OSC in and
+   out, translated in any direction, with audio and later CV. A software mixer
+   and MIDI router in one. DAWs and shims attach to the same running instance
+   and take their channels from it, much as NI's agent sits under Komplete
+   Kontrol.
+
+Shim mode should work standalone and also attach to full mode when it is
+running. Both build on the same core crates, so they are not two codebases.
+
+Goal G1 (`goals/G1-host-ui.md`) is groundwork for both flavours: plugin
+windows, a clock and audio device choice are needed by each.
+
 ### D. The rack — owner's idea, 2026-10-21
 
 Komplete Kontrol chains NKS plugins in a fixed line, which the owner has
