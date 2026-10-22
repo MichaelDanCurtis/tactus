@@ -249,6 +249,46 @@ written into `mk3-midi-mode.md`: read the source of truth first. Static
 analysis gave a definite answer in three queries after name-guessing had
 burned three rounds on a wrong lead.
 
+## CONFIRMED: a known-good sequence drives the light guide
+
+**Evidence class: hardware observation.** The public LED test script from the
+prior-art thread ([skylerwshaw's gist](https://gist.github.com/skylerwshaw/be4b39e12b65286aafed25e2a595e547),
+reviewed before running: Unix socket only, no network, no subprocesses) was
+run by the device's owner against agent `2.0.7 (R15)`. **The light guide lit
+green.** Its self-test also passed, including the legacy-id fallback this
+agent needs.
+
+The sequence, on one connection:
+
+| # | Kind | Method | Arguments |
+|---|---|---|---|
+| 0 | raw | — | 16-byte UUID prelude |
+| 1 | request | `instance_hello` (string name) | `[uuid, {client_info: {name, version, type: "standalone"}, ipc_protocol_version: "2.1.0"}]` |
+| 2 | request | `connect_device` (382) | `[uuid, serial]` — reply checked |
+| 3 | notify | `client_request_focus` (373) | `[uuid, serial]` |
+| 4 | notify | `client_lightguide_set_leds` (360) | `[uuid, serial, {239: [[midi_note, colour], …]}]` |
+
+Key `239` is `client_midi_addressing`. The array is indexed by **MIDI note**,
+128 entries, not by physical key. Colour bytes: green `0x1C`, red `0x04`.
+
+Compared with this project's failing attempts, four differences:
+
+1. **`connect_device` after the handshake** — never sent on an identified
+   connection here. This is the step that attaches a device to the instance,
+   and its absence is the most likely cause of every `no such device`.
+2. **`(uuid, serial)` order**, as already corrected above.
+3. **`ipc_protocol_version: "2.1.0"`**, matching the agent, where this project
+   sent `"2.2.0"`.
+4. **Integer method ids and integer payload keys** from the registry, rather
+   than strings.
+
+Not yet established: whether Komplete Kontrol was running during the run.
+It was confirmed closed shortly afterwards.
+
+The agent logged nothing for the run. That is consistent with success, since
+successful calls log only at trace level and this agent was at default level.
+It is not evidence by itself.
+
 ## Correction: argument order is (instance_uuid, serial, payload)
 
 Earlier sections of this document state display calls take
