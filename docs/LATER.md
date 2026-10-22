@@ -39,6 +39,17 @@ where the evidence is. Larger work lives in `PROGRAM.md`.
 The known gaps at the first playable milestone are listed in
 `hosting.md` (Known gaps).
 
+## Shim
+
+- **Settings strip** in the frame's window: plugin, preset folder, keyboard.
+  Until then `~/Library/Application Support/tactus/shim.conf`.
+- **Transport buttons in a DAW:** VST3 gives a plugin no host-transport
+  control. Options: send MIDI Machine Control, or let full mode bridge to the
+  DAW's own control surface protocol.
+- **Plug-in scan side effect:** the DAW's scan instantiates the shim, which
+  loads its instrument and grabs the keyboard briefly.
+- **No DAW on the development machine.** Ableton checks need the owner.
+
 ## Other
 
 - **DAW-port MIDI protocol.** Recovered from NI's Cubase script, never

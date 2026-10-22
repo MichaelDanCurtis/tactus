@@ -45,7 +45,9 @@ pub struct Screen {
 /// What the frame asks of the keyboard.
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Take the keyboard (if not already ours) and show this screen.
+    /// The screen to show. The first one claims the keyboard (a shim just
+    /// inserted gets it); later ones only refresh it while it is ours, so a
+    /// background track never steals the keyboard.
     Show(Box<Screen>),
     /// One knob's new value and text.
     Value {
@@ -65,7 +67,7 @@ pub enum Command {
         /// Tempo in BPM.
         tempo: f64,
     },
-    /// Take the keyboard back from another instance.
+    /// Take the keyboard (the track is being played), if not already ours.
     TakeFocus,
     /// Stop the thread.
     Quit,
@@ -204,6 +206,18 @@ fn run(
     let me = client.instance_id().to_owned();
 
     let mut focused = false;
+    let mut claimed_once = false;
+    // TACTUS_SHIM_DEBUG=1 logs every gain and loss of the keyboard.
+    let debug = std::env::var_os("TACTUS_SHIM_DEBUG").is_some();
+    let tag = format!("[{client_name} {}]", me.get(..8).unwrap_or(&me));
+    let note = |focused: bool, why: &str| {
+        if debug {
+            eprintln!(
+                "{tag} {} keyboard ({why})",
+                if focused { "has" } else { "lost" }
+            );
+        }
+    };
     let mut screen: Option<Box<Screen>> = None;
     let mut transport = (false, 120.0);
     let mut last_focus = Instant::now();
@@ -229,7 +243,11 @@ fn run(
         for n in client.listen(Duration::from_millis(5)).map_err(e)? {
             for ev in events::decode(client.registry(), &n) {
                 if let Event::Focus { owner } = &ev {
-                    focused = *owner == me;
+                    let now = *owner == me;
+                    if now != focused {
+                        note(now, "focus_changed");
+                    }
+                    focused = now;
                 }
                 if events_out.send(ev).is_err() {
                     return Ok(());
@@ -242,12 +260,23 @@ fn run(
                 Err(TryRecvError::Empty) => break,
                 Ok(Command::Show(s)) => {
                     screen = Some(s);
-                    take(&mut client, &screen, transport)?;
-                    focused = true;
+                    if !claimed_once {
+                        claimed_once = true;
+                        take(&mut client, &screen, transport)?;
+                        if !focused {
+                            note(true, "inserted");
+                        }
+                        focused = true;
+                    } else if focused && let Some(s) = &screen {
+                        publish(&mut client, &serial, s)?;
+                    }
                 }
                 Ok(Command::TakeFocus) => {
-                    take(&mut client, &screen, transport)?;
-                    focused = true;
+                    if !focused {
+                        take(&mut client, &screen, transport)?;
+                        note(true, "played");
+                        focused = true;
+                    }
                 }
                 Ok(Command::Value { id, value, display }) => {
                     if focused {

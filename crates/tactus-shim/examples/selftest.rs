@@ -22,6 +22,9 @@ use tactus_shim::FRAME_CID;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let live = args.iter().any(|a| a == "live");
+    if args.iter().any(|a| a == "two") {
+        return two_shims();
+    }
     let seconds: u64 = args.iter().find_map(|a| a.parse().ok()).unwrap_or(300);
     let bundle = Path::new("target/debug/Tactus Shim.vst3");
     let module = Module::load(bundle)?;
@@ -37,6 +40,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "shim params: {} (the instrument's, forwarded)",
         shim.parameters().len()
     );
+
+    // Goal item 5: the shim's window is the instrument's own. Ask the shim
+    // for its editor, as a DAW does, and see whose view comes back.
+    {
+        use tactus_plugin_host::vst3::ComPtr;
+        use tactus_plugin_host::vst3::Steinberg::Vst::IEditControllerTrait;
+        use tactus_plugin_host::vst3::Steinberg::{IPlugView, IPlugViewTrait, ViewRect, kResultOk};
+        // SAFETY: plain VST3 calls on a live controller.
+        unsafe {
+            let raw = shim.edit_controller().createView(c"editor".as_ptr());
+            match ComPtr::<IPlugView>::from_raw(raw) {
+                Some(view) => {
+                    let nsview = view.isPlatformTypeSupported(c"NSView".as_ptr()) == kResultOk;
+                    let mut r = ViewRect {
+                        left: 0,
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                    };
+                    let sized = view.getSize(&mut r) == kResultOk;
+                    println!(
+                        "shim editor: a view, NSView supported: {nsview}, size {}x{} ({})",
+                        r.right - r.left,
+                        r.bottom - r.top,
+                        if sized {
+                            "from the instrument"
+                        } else {
+                            "unknown"
+                        }
+                    );
+                }
+                None => println!("shim editor: none"),
+            }
+        }
+    }
 
     let rate = if live {
         cpal::default_host()
@@ -92,7 +130,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // as a DAW does when it loads a project.
         drop(shim);
         // SAFETY: single-threaded here; the shim reads this at initialize.
-        unsafe { std::env::remove_var("TACTUS_SHIM_PRESET") };
+        // An empty path overrides shim.conf: the fresh shim starts empty.
+        unsafe { std::env::set_var("TACTUS_SHIM_PRESET", "") };
         let mut again = module.instantiate(&cid)?;
         let before = again.parameters().len();
         again.load_state(&state)?;
@@ -171,5 +210,90 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pump_main_run_loop(Duration::from_millis(5));
     }
     drop(stream);
+    Ok(())
+}
+
+/// Goal item 4: two shims, one keyboard. Play only the second; it should take
+/// the keyboard from the first. Run with TACTUS_SHIM_DEBUG=1 to see focus.
+fn two_shims() -> Result<(), Box<dyn std::error::Error>> {
+    let module = Module::load(Path::new("target/debug/Tactus Shim.vst3"))?;
+    let cid = FRAME_CID.map(|b| b as u8);
+    let mut a = module.instantiate(&cid)?;
+    let pump = |d: Duration| {
+        let t = Instant::now();
+        while t.elapsed() < d {
+            pump_main_run_loop(Duration::from_millis(10));
+        }
+    };
+    pump(Duration::from_secs(3));
+    let mut b = module.instantiate(&cid)?;
+    pump(Duration::from_secs(3));
+    a.start_audio(48_000.0, 4096)?;
+    b.start_audio(48_000.0, 4096)?;
+    let mut audio_a = a.take_audio().ok_or("no engine")?;
+    let mut audio_b = b.take_audio().ok_or("no engine")?;
+    let mut block = vec![0.0f32; 512 * 2];
+    let run = |a: &mut tactus_plugin_host::Audio,
+               b: &mut tactus_plugin_host::Audio,
+               block: &mut [f32],
+               to_b: &[Input],
+               secs: u64| {
+        let t = Instant::now();
+        let mut first = true;
+        while t.elapsed() < Duration::from_secs(secs) {
+            a.render(block, 2, &[]);
+            b.render(block, 2, if first { to_b } else { &[] });
+            first = false;
+            pump_main_run_loop(Duration::from_millis(10));
+        }
+    };
+    println!("both shims up; the second was shown last");
+    run(&mut audio_a, &mut audio_b, &mut block, &[], 2);
+    println!("now playing the FIRST shim only");
+    run(
+        &mut audio_b,
+        &mut audio_a,
+        &mut block,
+        &[Input::NoteOn {
+            pitch: 60,
+            velocity: 100,
+        }],
+        2,
+    );
+    run(
+        &mut audio_b,
+        &mut audio_a,
+        &mut block,
+        &[Input::NoteOff {
+            pitch: 60,
+            velocity: 0,
+        }],
+        1,
+    );
+    println!("now playing the SECOND shim only");
+    run(
+        &mut audio_a,
+        &mut audio_b,
+        &mut block,
+        &[Input::NoteOn {
+            pitch: 64,
+            velocity: 100,
+        }],
+        2,
+    );
+    run(
+        &mut audio_a,
+        &mut audio_b,
+        &mut block,
+        &[Input::NoteOff {
+            pitch: 64,
+            velocity: 0,
+        }],
+        1,
+    );
+    run(&mut audio_a, &mut audio_b, &mut block, &[], 2);
+    println!("(two idle seconds passed; tearing down)");
+    a.put_audio(audio_a);
+    b.put_audio(audio_b);
     Ok(())
 }

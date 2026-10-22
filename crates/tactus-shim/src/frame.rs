@@ -62,6 +62,9 @@ struct Main {
     active: bool,
     held: [bool; 128],
     sent_transport: (bool, u64),
+    /// Parameter ids on the keyboard's pages. Value updates for anything
+    /// else are not sent: the agent rejects ids its page does not hold.
+    on_screen: std::collections::HashSet<u32>,
 }
 
 /// State the audio thread renders with.
@@ -108,6 +111,7 @@ impl Default for Frame {
                 active: false,
                 held: [false; 128],
                 sent_transport: (false, 0),
+                on_screen: std::collections::HashSet::new(),
             }),
             rt: Mutex::new(Rt {
                 audio: None,
@@ -167,6 +171,11 @@ fn write_all(stream: *mut IBStream, bytes: &[u8]) -> tresult {
 
 impl Main {
     fn send(&self, cmd: Command) {
+        if let Command::Value { id, .. } = &cmd
+            && !self.on_screen.contains(id)
+        {
+            return;
+        }
         if let Some(k) = &self.keyboard {
             let _ = k.commands.send(cmd);
         }
@@ -216,8 +225,14 @@ impl Main {
         })
     }
 
-    fn show(&self) {
+    fn show(&mut self) {
         if let Some(s) = self.screen() {
+            self.on_screen = s
+                .pages
+                .iter()
+                .flatten()
+                .flat_map(|(_, knobs)| knobs.iter().flatten().map(|k| k.id))
+                .collect();
             self.send(Command::Show(Box::new(s)));
         }
     }
@@ -353,9 +368,11 @@ impl Main {
         }
 
         // The instrument's own news: a preset applied, or edits in its window.
-        if let Some(inst) = &self.instrument {
-            let flags = inst.plugin.take_restart_flags();
-            let edits = inst.plugin.take_edits();
+        let news = self
+            .instrument
+            .as_ref()
+            .map(|i| (i.plugin.take_restart_flags(), i.plugin.take_edits()));
+        if let Some((flags, edits)) = news {
             if flags & PARAM_VALUES_CHANGED != 0 {
                 self.restart(PARAM_VALUES_CHANGED);
                 self.show();
@@ -363,7 +380,11 @@ impl Main {
             for (id, value) in edits {
                 let _ = self.params_tx.try_send(Input::Param { id, value });
                 self.edit(id, value);
-                let display = inst.plugin.display(id, value).unwrap_or_default();
+                let display = self
+                    .instrument
+                    .as_ref()
+                    .and_then(|i| i.plugin.display(id, value))
+                    .unwrap_or_default();
                 self.send(Command::Value { id, value, display });
             }
         }
