@@ -205,27 +205,34 @@ impl Registry {
         Ok(Self::from_names(names))
     }
 
-    /// Rewrite interned integer keys and values into their names, recursively.
+    /// Rewrite interned integer **keys** into their names, recursively.
     ///
-    /// The agent sends `{218: 220}` where it means `{page: browser}`. Without
-    /// this a caller is reading index soup.
+    /// The agent sends `{218: 220}` where it means `{page: 220}`. Values are
+    /// deliberately left alone: some are symbols (`page: 220` is `browser`)
+    /// but many are plain numbers — an encoder step of `1`, a `root_key`
+    /// note — and converting those turns `1` into `pedal_expression_connected`.
+    /// An earlier version of this did exactly that. A caller that knows a
+    /// field is an enum can resolve its value with [`Registry::name`].
     pub fn humanise(&self, v: &Value) -> Value {
         match v {
-            Value::Integer(n) => match n.as_u64().and_then(|u| u32::try_from(u).ok()) {
-                Some(i) => match self.name(i) {
-                    Some(s) => Value::String(s.into()),
-                    None => v.clone(),
-                },
-                None => v.clone(),
-            },
             Value::Array(items) => Value::Array(items.iter().map(|i| self.humanise(i)).collect()),
             Value::Map(pairs) => Value::Map(
                 pairs
                     .iter()
-                    .map(|(k, val)| (self.humanise(k), self.humanise(val)))
+                    .map(|(k, val)| (self.humanise_key(k), self.humanise(val)))
                     .collect(),
             ),
             other => other.clone(),
+        }
+    }
+
+    fn humanise_key(&self, k: &Value) -> Value {
+        match k.as_u64().and_then(|u| u32::try_from(u).ok()) {
+            Some(i) => match self.name(i) {
+                Some(s) => Value::String(s.into()),
+                None => k.clone(),
+            },
+            None => k.clone(),
         }
     }
 }
@@ -795,20 +802,28 @@ mod tests {
     }
 
     #[test]
-    fn humanise_resolves_interned_keys_and_values() {
-        // The agent sends {218: 220} meaning {page: browser}; a caller reading
-        // raw indices is reading noise.
+    fn humanise_resolves_keys_and_leaves_values_alone() {
+        // {218: 220} is {page: 220}. The key is interned; the value is left
+        // raw, because values are often plain numbers -- an encoder step of 1
+        // is not symbol #1.
         let mut names = vec![String::new(); 221];
+        names[1] = "pedal_expression_connected".into();
         names[218] = "page".into();
         names[220] = "browser".into();
         let r = Registry::from_names(names);
-        let raw = Value::Map(vec![(Value::from(218u32), Value::from(220u32))]);
-        let out = r.humanise(&raw);
-        let Value::Map(pairs) = out else {
+        let raw = Value::Map(vec![
+            (Value::from(218u32), Value::from(220u32)),
+            (
+                Value::String("browser_navigate_sound".into()),
+                Value::from(1u32),
+            ),
+        ]);
+        let Value::Map(pairs) = r.humanise(&raw) else {
             unreachable!("humanise keeps the map shape")
         };
         assert_eq!(pairs[0].0.as_str(), Some("page"));
-        assert_eq!(pairs[0].1.as_str(), Some("browser"));
+        assert_eq!(pairs[0].1, Value::from(220u32), "values stay raw");
+        assert_eq!(pairs[1].1, Value::from(1u32), "a step of 1 is not a symbol");
     }
 
     #[test]

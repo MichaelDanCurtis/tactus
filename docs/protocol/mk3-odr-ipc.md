@@ -603,3 +603,44 @@ TACTUS_ODR_REGISTRY=/path/to/symbol_registry.json \
 
 The pilot is read-only: it enumerates, reads properties and settings, and
 listens. It writes nothing.
+
+## Input: what the keyboard sends to the focused instance
+
+**Evidence class: hardware observation.** Captured with `examples/buttons.rs`
+holding focus on an S88 MK3, agent `2.0.7 (R15)`, Komplete Kontrol closed.
+
+Control actions arrive through **one** method:
+
+```text
+plugin_action(serial, { <action_symbol>: <value> }, <bool>)
+```
+
+The action is the map's key, by registry id. Observed:
+
+| Control | Action | Value |
+|---|---|---|
+| Browser page encoders | `browser_navigate_sound`, `browser_navigate_bank`, `browser_navigate_brand` | `±1` step |
+| Load next / previous sound | `browser_load_next_sound`, `browser_load_previous_sound` | `-1` in both cases; meaning not yet established |
+| Browser filter buttons | `browser_toggle_filter_user_presets`, `browser_toggle_filter_favorite_presets` | `nil` |
+
+The third argument was `true` in every case; meaning not established.
+
+State changes arrive as their own notifications:
+
+| Event | Payload |
+|---|---|
+| Page change (the **Browser** button) | `device_owned_instance_client_state_changed(serial, {page: <symbol>, has_lightguide_focus: bool})` |
+| A built-in mode taking the surface | `focus_changed(serial, "play_assist")`, `focus_changed(serial, "standalone_midi")`; focus came back to the instance on exit |
+| Scale root change | `device_properties(serial, {root_key: <note number>})` |
+| Becoming the active instance | `active_instance_client_changed(serial, <instance uuid>)` |
+
+**Values are not always symbols.** `page: 220` is the symbol `browser`, but
+encoder steps and `root_key` are plain integers. An early version of this
+crate's decoder converted every integer through the registry and reported an
+encoder step of `1` as `pedal_expression_connected` — symbol #1. The decoder
+now resolves keys only.
+
+**Not yet observed:** transport buttons and knob turns. The knob hypothesis is
+that `plugin_parameter_value_change` only reports for parameters that exist,
+and the parameter page currently shows "no instrument loaded"; publishing a
+parameter page first should make knob turns report.
