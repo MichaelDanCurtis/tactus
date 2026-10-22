@@ -769,7 +769,7 @@ parameters: {
     continuous_parameter: {          # exactly one key: the kind tag. A sibling
                                      # key such as "name" is fatal.
       parameter_value: { value: 0.5, display_value: "50%" },   # confirmed
-      parameter_style: <variant>,    # encoding NOT YET KNOWN
+      parameter_style: { knob_parameter_style: nil },          # confirmed
     }
   }
 }
@@ -778,13 +778,21 @@ parameters: {
 `toggle_parameter` parses with the same two required fields.
 
 `parameter_style` is `variant<knob_parameter_style, value_parameter_style>`
-for a continuous parameter. Every encoding tried is fatal: an empty map, a map
-keyed by `knob_parameter_style` / `value_parameter_style` (empty or with
-`index` / `value_image`), short tags `knob` / `value`, the bare tag as a
-string, a `[tag, {}]` array, an index, and `nil`.
+for a continuous parameter, encoded as a **one-entry map from the tag to
+`nil`**. Both `{knob_parameter_style: nil}` and `{value_parameter_style: nil}`
+parse with no further missing keys, which makes this a complete parameter.
 
-**Stop guessing here.** The variant has its own converter. Decompiling it,
-rather than continuing the sweep, is the next step.
+Six blind encodings failed first. Two decompiles settled it:
+
+- `convert_variant_with_symbol_registry<variant<knob…, value…>, false>` at
+  `0x1002be770` requires a map of size 1. It resolves the key through
+  `continuous_parameter_styles_enum`, then requires the value's msgpack type
+  to be **nil**. Reading the 24-byte `msgpack::object` layout (type at +0, via
+  at +8) is what showed this checks the value's type. It is not checking that
+  a map is empty, which is where `{tag: {}}` went wrong.
+- `lookup_enum_from_string<continuous_parameter_styles_enum>` at `0x1002be654`
+  binary-searches a two-entry table starting at the string
+  `knob_parameter_style`. The tag spelling was right all along.
 
 The parameter's name is not a sibling of the kind tag. It is most likely
 carried by the NKS layout's per-knob placement, which matches how NKS

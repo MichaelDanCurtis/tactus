@@ -63,14 +63,10 @@ fn main() -> Result<(), OdrError> {
         }
         cp(inner)
     };
-    let st = |tag: &str, fields: Vec<(&str, Value)>| Some(m(vec![(tag, m(fields))]));
+    let st_nil = |tag: &str| Some(m(vec![(tag, Value::Nil)]));
     let variants: Vec<(&str, Vec<(&str, Value)>, Vec<(&str, Value)>)> = vec![
-        ("{value_parameter_style: {index: 0}}", with_style(st("value_parameter_style", vec![("index", u(0))])), vec![]),
-        ("{value_parameter_style: {value_image: nil}}", with_style(st("value_parameter_style", vec![("value_image", Value::Nil)])), vec![]),
-        ("{knob_parameter_style: {index: 0}}", with_style(st("knob_parameter_style", vec![("index", u(0))])), vec![]),
-        ("{knob: {}}", with_style(st("knob", vec![])), vec![]),
-        ("{value: {}}", with_style(st("value", vec![])), vec![]),
-        ("{knob_parameter: {}}", with_style(st("knob_parameter", vec![])), vec![]),
+        ("style = {knob_parameter_style: nil}", with_style(st_nil("knob_parameter_style")), vec![]),
+        ("style = {value_parameter_style: nil}", with_style(st_nil("value_parameter_style")), vec![]),
     ];
     let base_missing = [
         "background", "parameters", "plugin_color", "nks_control_color",
