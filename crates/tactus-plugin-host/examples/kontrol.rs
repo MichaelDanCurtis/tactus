@@ -1,7 +1,8 @@
 //! Load an NKS preset into its plugin and put the plugin on the keyboard: the
 //! preset's pages with the plugin's **own** values and value text, knobs that
 //! set the plugin's parameters, preset up/down through the folder, and the
-//! keys playing the plugin through the default audio output.
+//! keys playing the plugin through the default audio output. Held keys light
+//! up green on the light guide.
 //!
 //! ```text
 //! TACTUS_ODR_REGISTRY=/path/to/symbol_registry.json \
@@ -31,6 +32,8 @@ use tactus_plugin_host::{
 
 const SERIAL: &str = "99FE7169";
 const BLOCK: usize = 512;
+/// Light-guide colour byte for a held key (confirmed: green).
+const HELD: u8 = 0x1C;
 /// Largest block the plugin is set up for; device callbacks are chunked to it.
 const MAX_BLOCK: usize = 4096;
 
@@ -258,6 +261,9 @@ fn main() -> Result<(), String> {
         }
         Err(err) => println!("audio: {err}; running silent"),
     }
+    // Note on/off copies for the light guide, which the main loop owns.
+    let (lights_tx, lights_rx) = std::sync::mpsc::channel::<(u8, bool)>();
+    let mut held = [false; 128];
     // Which parameter each wheel, pedal and controller drives. Refreshed after
     // every preset load, since a preset can change it.
     let midi_map: Arc<Mutex<MidiMap>> = Arc::new(Mutex::new(plugin.midi_map()));
@@ -270,6 +276,7 @@ fn main() -> Result<(), String> {
         Ok(keys) => {
             println!("keys: {}", keys.identity().display_name());
             let tx = tx.clone();
+            let lights = lights_tx.clone();
             let map = Arc::clone(&midi_map);
             std::thread::spawn(move || {
                 let mut first = true;
@@ -278,6 +285,15 @@ fn main() -> Result<(), String> {
                         continue;
                     };
                     let input = map.lock().ok().and_then(|m| midi_to_input(&bytes, &m));
+                    match input {
+                        Some(Input::NoteOn { pitch, .. }) => {
+                            let _ = lights.send((pitch, true));
+                        }
+                        Some(Input::NoteOff { pitch, .. }) => {
+                            let _ = lights.send((pitch, false));
+                        }
+                        _ => {}
+                    }
                     if let Some(input) = input {
                         if first {
                             first = false;
@@ -318,6 +334,20 @@ fn main() -> Result<(), String> {
     let stamp = |t: Instant| format!("[{:6.2}s]", t.elapsed().as_secs_f32());
     while start.elapsed() < Duration::from_secs(seconds) {
         clock.tick(&mut plugin);
+        let mut changed = false;
+        while let Ok((pitch, down)) = lights_rx.try_recv() {
+            if let Some(h) = held.get_mut(usize::from(pitch)) {
+                changed |= *h != down;
+                *h = down;
+            }
+        }
+        if changed {
+            // Every key, so released ones go dark.
+            let leds: Vec<(u8, u8)> = (0u8..128)
+                .map(|n| (n, if held[usize::from(n)] { HELD } else { 0 }))
+                .collect();
+            client.set_leds(SERIAL, &leds).map_err(e)?;
+        }
         for n in client.listen(Duration::from_millis(5)).map_err(e)? {
             for event in events::decode(client.registry(), &n) {
                 match event {
@@ -377,7 +407,11 @@ fn main() -> Result<(), String> {
                             Err(err) => println!("{} {}: {err}", stamp(start), p.display()),
                         }
                     }
-                    _ => {}
+                    // Not handled yet (the 4-way control and dial, among others):
+                    // logged so a session captures what they send.
+                    Event::Focus { .. } | Event::Page { .. } | Event::KnobTouch { .. } => {}
+                    Event::Other { ref name, .. } if name == "active_instance_client_changed" => {}
+                    other => println!("{} unhandled: {other:?}", stamp(start)),
                 }
             }
         }
