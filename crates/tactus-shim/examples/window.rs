@@ -118,6 +118,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         shoot(&out.replace(".png", "-swapped.png"))?;
     }
+
+    // Click the strip's button, as a person would.
+    if std::env::var_os("TACTUS_SHIM_PICK").is_some() {
+        fn find_button(
+            v: &objc2_app_kit::NSView,
+        ) -> Option<objc2::rc::Retained<objc2_app_kit::NSButton>> {
+            for sub in v.subviews().iter() {
+                if let Ok(b) = sub.clone().downcast::<objc2_app_kit::NSButton>() {
+                    return Some(b);
+                }
+                if let Some(b) = find_button(&sub) {
+                    return Some(b);
+                }
+            }
+            None
+        }
+        let button = find_button(&content).ok_or("no strip button")?;
+        println!("clicking: {}", button.title());
+        // SAFETY: a plain click on the main thread.
+        unsafe { button.performClick(None) };
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(seconds) {
+            let _ = shim.process_block(512);
+            pump_main_run_loop(Duration::from_millis(10));
+        }
+        shoot(&out.replace(".png", "-clicked.png"))?;
+    }
     // SAFETY: detach before the view and window go.
     unsafe { view.removed() };
     drop(view);

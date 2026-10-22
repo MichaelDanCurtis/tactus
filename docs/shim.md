@@ -90,6 +90,7 @@ shim and the shim loading Massive X (Wob Wolfer):
 | Reopen: a fresh, empty shim given that state | 0 parameters before, 2,102 after; plays (0.36) |
 | Editor | the instrument's own view; supports `NSView` |
 | Strip in a real window | "Wob Wolfer — Massive X" and **Choose preset…** above Massive X's editor; window 1249×753 = editor + 30 |
+| **Choose preset…** clicked (`performClick`, `TACTUS_SHIM_PICK` supplies the file in place of the open panel) | strip and editor switch to Bassy Circuit |
 | Swap with the window open (`SWAP_TO=…`) | strip reads "Agonic Drone — Massive X", the editor is the new instance's; no crash |
 | Editor in a real window (`examples/window.rs`) | attached to an `NSWindow`'s content view as a DAW would: Massive X's full editor, 1249×723, showing the preset loaded through the shim. The screenshot is not in the repo: it is NI's artwork |
 | Two shims, play one then the other | the keyboard moves to each in turn; a background republish does not steal it |
@@ -102,9 +103,8 @@ The window test stands in for item 5 until then.
 ## Open
 
 - **Keyboard selector** in the strip: one keyboard is assumed.
-- **Choose preset…** was exercised through the same swap path (state restore
-  with the window open), not by clicking. A click test needs a person or a
-  DAW.
+- **Choose preset…** has been clicked programmatically; only the file
+  panel itself has not been driven by a person.
 - Hosts that cannot see track selection still work by the played-track rule.
 - The keyboard's transport buttons do nothing in a DAW (see above).
 - During a DAW's plug-in scan the shim is instantiated, loads its instrument

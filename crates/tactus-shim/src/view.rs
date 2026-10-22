@@ -209,6 +209,14 @@ define_class!(
         #[unsafe(method(choosePreset:))]
         fn choose_preset(&self, _sender: Option<&AnyObject>) {
             let mtm = self.mtm();
+            // Test seam: TACTUS_SHIM_PICK names the file instead of asking,
+            // so an automated click can run the real path after the panel.
+            if let Some(path) = std::env::var_os("TACTUS_SHIM_PICK") {
+                if let Some(shared) = self.ivars().shared.upgrade() {
+                    crate::frame::choose_preset(&shared, std::path::Path::new(&path));
+                }
+                return;
+            }
             let panel = NSOpenPanel::openPanel(mtm);
             panel.setCanChooseFiles(true);
             panel.setCanChooseDirectories(false);
