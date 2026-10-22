@@ -971,6 +971,10 @@ press changed the preset. The log showed `next` stepping down the alphabet.
 Direction is the action name. `events::decode` reports both as
 `Event::PresetStep(±1)` and ignores the payload.
 
+With that fix the owner confirmed both directions: preset **down** sends
+`browser_load_next_sound` (forward through the folder), preset **up** sends
+`browser_load_previous_sound`.
+
 Loading the next preset is just a new layout sent with view address 0, so the
 new preset opens on its first page, as the owner observed. Stepping through
 dozens of presets in a few seconds produced no agent warnings.
