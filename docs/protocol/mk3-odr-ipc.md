@@ -249,7 +249,62 @@ written into `mk3-midi-mode.md`: read the source of truth first. Static
 analysis gave a definite answer in three queries after name-guessing had
 burned three rounds on a wrong lead.
 
-## Correction: `instance_hello` is **not** solved
+## CONFIRMED: host content renders on the MK3 display
+
+**Evidence class: hardware observation, visually confirmed by the device's
+owner.** The keyboard's screen showed `TACTUS` / `hello from tactus`.
+
+The call that did it:
+
+```text
+[2, "send_global_notification", [
+     "99FE7169",                       # device serial
+     "<our-instance-uuid>",            # the uuid sent as the connection prelude
+     { "notification": {
+         "level":          "info",
+         "title":          "TACTUS",
+         "description":    "hello from tactus",
+         "url_message":    "",
+         "url":            "",
+         "blocking_state": "non_blocking" } } ]]
+```
+
+preceded on the same connection by the 16-byte UUID prelude,
+`instance_hello`, and `client_request_focus(serial, instance_uuid)`.
+
+**Komplete Kontrol was closed.** Only NI's background agent was in the path,
+which is the result this project needs: the display is drivable without the
+vendor's application.
+
+### A retraction of the retraction
+
+An earlier revision of this document said "nothing has been displayed on the
+device". That was wrong, and the way it was wrong is worth keeping.
+
+Two measurement faults were real and are still worth fixing — a reply check
+that ignored the msgid, and a log window too short to catch the agent's
+warnings. But having found bad instrumentation, the conclusion drawn from it
+was "it failed", when the only supportable conclusion was **"this cannot
+currently be measured"**. The pushes had in fact landed.
+
+Distrusting a measurement is not the same as establishing a negative. The
+first is caution; the second needs its own evidence.
+
+The `[trace]`-level detail compounded it: a *successful* `instance_hello` logs
+at trace, and the agent had been restarted without `SPDLOG_LEVEL=trace`, so
+successes were invisible while failures still printed at warning. An absence
+of log lines was read as an absence of events.
+
+### Still unexplained
+
+With strict msgid matching, `instance_hello` draws a genuine reply — but
+`instance_goodbye` then reports `client not found`, and in a 30-push run the
+first ~14 landed and the rest failed with `no such device <our-instance>`.
+Fourteen pushes at ~1.2 s is ~17 s, which suggests the session lapses. The
+agent's own handshake advertises `disable_heartbeat_validation: false`, so
+heartbeats are validated and an idle client is plausibly dropped. Under test.
+
+## Superseded: `instance_hello` is **not** solved
 
 The section above claimed it was. That was wrong, and two measurement errors
 of mine produced it. Both are worth recording, because they are the kind that
