@@ -50,6 +50,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+pub mod events;
+
 use rmpv::Value;
 use thiserror::Error;
 
@@ -247,6 +249,8 @@ pub struct Notification {
     /// Parameters, as sent.
     pub params: Value,
 }
+
+pub use events::{Event, TransportAction};
 
 /// Generate a version-4 UUID from the system CSPRNG.
 ///

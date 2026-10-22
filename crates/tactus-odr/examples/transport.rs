@@ -21,7 +21,8 @@ fn hold(client: &mut Client, serial: &str, st: &HostState<'_>, secs: u64) -> Res
             // control that reports on a different channel.
             if matches!(
                 name.as_str(),
-                "focus_changed" | "active_instance_client_changed"
+                "focus_changed"
+                    | "active_instance_client_changed"
                     | "device_owned_instance_client_state_changed"
             ) {
                 continue;
