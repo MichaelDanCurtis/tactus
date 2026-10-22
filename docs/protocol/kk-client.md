@@ -73,8 +73,11 @@ mapped to the wire names in the agent's registry (agent `2.0.7 (R15)`):
 | `odrsp::{arp_engine_change,arp_engine_trigger,scale_engine_change}` | `smartplay_…` | |
 | `odrsp::smartplay_device_owned_viewstate_changed` | same | |
 
-KK also knows these, but **agent 2.0.7's registry does not register them**.
-They probably need a newer agent:
+KK also knows these, but **the agent does not register them**. Agent 2.0.7 is
+the latest release (the owner installed it on 2026-10-21), so these are
+**currently unusable** from a client. They are most likely meant for other
+hardware, such as Maschine, or for a future agent. Revisit them against the
+owner's other NI software:
 
 `set_host_pad_mode`, `toggle_node_collapsed`, `select_track`, `navigate_track`,
 `navigate_track_depth`, `mute_track`, `solo_track`, `track_volume_change`,
