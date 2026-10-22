@@ -282,8 +282,10 @@ Compared with this project's failing attempts, four differences:
 4. **Integer method ids and integer payload keys** from the registry, rather
    than strings.
 
-Not yet established: whether Komplete Kontrol was running during the run.
-It was confirmed closed shortly afterwards.
+**Komplete Kontrol was closed** — confirmed by the owner — and the result
+**reproduced on a second run**. Only NI's background agent was in the path.
+This is the result the program rests on: the hardware responds to a client
+that is not the vendor's application.
 
 The agent logged nothing for the run. That is consistent with success, since
 successful calls log only at trace level and this agent was at default level.
