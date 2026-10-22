@@ -833,6 +833,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tactus-nks"
+version = "0.1.0"
+dependencies = [
+ "rmpv",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "tactus-odr"
 version = "0.1.0"
 dependencies = [
