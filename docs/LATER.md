@@ -33,6 +33,11 @@ where the evidence is. Larger work lives in `PROGRAM.md`.
   differs (FM8 `#EBE9EA` against Super 8 `#24B0E8`, say). The mechanism itself
   is already confirmed.
 
+## Hosting
+
+The known gaps at the first playable milestone are listed in
+`hosting.md` (Known gaps).
+
 ## Other
 
 - **DAW-port MIDI protocol.** Recovered from NI's Cubase script, never

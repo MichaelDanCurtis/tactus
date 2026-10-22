@@ -244,7 +244,7 @@ Deliberate design constraints, because this is going public.
 | M3 | A4 — display, shape per §5 | Yes: completes the surface |
 | M4 | C on top of A — the lightweight host, no NKS | **Yes: already better than the incumbent for many users** |
 | M5 | B1 + B2 — NKS preset format and browser | Yes: browsing without hosting |
-| M6 | B3 + B4 — plugin host and auto-mapping | Completes D2 |
+| M6 | B3 + B4 — plugin host and auto-mapping | Completes D2 — **first playable plugin reached** (Massive X, see `hosting.md`) |
 | M7 | D — Maschine MK2 | Second device validates the SDK's abstractions |
 | M8 | E — Akai MPC | |
 
