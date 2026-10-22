@@ -146,8 +146,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if start.elapsed().as_secs() >= next_report {
                 let saved = plugin.save_state().map(|v| v.len()).unwrap_or(0);
                 println!(
-                    "wait    {next_report:>2}s: {} changed, getState {saved} bytes",
-                    changed(&snapshot(&plugin))
+                    "wait    {next_report:>2}s: {} changed, getState {saved} bytes, restart flags {:#x}",
+                    changed(&snapshot(&plugin)),
+                    plugin.take_restart_flags()
                 );
                 next_report += 1;
             }

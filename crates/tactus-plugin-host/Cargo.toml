@@ -15,4 +15,5 @@ thiserror = "2"
 core-foundation = "0.10"
 
 [dev-dependencies]
-tactus-nks = { path = "../tactus-nks" }
+tactus-nks = { path = "../tactus-nks", features = ["resources"] }
+tactus-odr = { path = "../tactus-odr" }

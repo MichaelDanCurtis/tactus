@@ -226,11 +226,12 @@ impl IBStreamTrait for MemoryStream {
     }
 }
 
-/// Receives edits the plugin makes itself, for example from its own GUI.
-/// Recorded so a host can echo them; nothing else is done with them yet.
+/// Receives edits the plugin makes itself, for example from its own GUI,
+/// and its requests to restart (for example after a preset applies).
 #[derive(Default)]
 pub(crate) struct ComponentHandler {
     pub(crate) edits: Mutex<Vec<(ParamID, ParamValue)>>,
+    pub(crate) restarts: Mutex<int32>,
 }
 
 impl Class for ComponentHandler {
@@ -253,7 +254,10 @@ impl IComponentHandlerTrait for ComponentHandler {
         kResultOk
     }
 
-    unsafe fn restartComponent(&self, _flags: int32) -> tresult {
+    unsafe fn restartComponent(&self, flags: int32) -> tresult {
+        if let Ok(mut r) = self.restarts.lock() {
+            *r |= flags;
+        }
         kResultOk
     }
 }

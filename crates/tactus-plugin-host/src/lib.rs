@@ -258,7 +258,7 @@ impl Module {
             separate,
             points,
             _host: host,
-            _handler: handler,
+            handler,
             engine: None,
         })
     }
@@ -303,9 +303,12 @@ pub struct Plugin<'m> {
     separate: bool,
     points: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
     _host: ComWrapper<com::Host>,
-    _handler: ComWrapper<com::ComponentHandler>,
+    handler: ComWrapper<com::ComponentHandler>,
     engine: Option<Engine>,
 }
+
+/// `restartComponent` flag: parameter values changed, re-read them.
+pub const PARAM_VALUES_CHANGED: i32 = 1 << 2;
 
 /// The audio side, once started: the processor and buffers for every bus.
 struct Engine {
@@ -512,6 +515,26 @@ impl Plugin<'_> {
             .flat_map(|ch| ch.iter().take(frames))
             .fold(0.0f32, |m, s| m.max(s.abs()));
         Ok(peak)
+    }
+
+    /// The `restartComponent` flags the plugin has raised since the last
+    /// call, OR-ed together. [`PARAM_VALUES_CHANGED`] after a preset applies
+    /// means the host should re-read every value.
+    pub fn take_restart_flags(&self) -> i32 {
+        self.handler
+            .restarts
+            .lock()
+            .map(|mut r| std::mem::take(&mut *r))
+            .unwrap_or(0)
+    }
+
+    /// Edits the plugin made itself (`performEdit`) since the last call.
+    pub fn take_edits(&self) -> Vec<(u32, f64)> {
+        self.handler
+            .edits
+            .lock()
+            .map(|mut e| std::mem::take(&mut *e))
+            .unwrap_or_default()
     }
 
     /// Whether the controller is a separate object from the processor, joined
