@@ -138,6 +138,18 @@ Consumes A, and later B. Shippable and genuinely useful **before** B exists: a f
 quiet host that drives the keyboard and talks to a DAW beats the incumbent for a lot of
 real use even with no plugin hosting at all.
 
+### D. The rack — owner's idea, 2026-10-21
+
+Komplete Kontrol chains NKS plugins in a fixed line, which the owner has
+always found clumsy. The goal instead is a **patchable graph**: modules
+(NKS instruments and effects, plus MIDI and audio sources and sinks) placed on
+a canvas and wired output to input freely, in the spirit of Node-RED or VCV
+Rack, but with NKS plugins as the modules. The keyboard follows the focused
+module: its pages, banner and colours.
+
+Needs from below: multiple plugin instances (B3), audio and MIDI routing
+between them, and per-module state save and restore. Not started.
+
 ## 4. What is already established
 
 Carried over from the reverse-engineering work in
