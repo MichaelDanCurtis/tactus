@@ -89,10 +89,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pump_main_run_loop(Duration::from_millis(10));
     }
     let id = window.windowNumber();
-    let status = std::process::Command::new("screencapture")
-        .args(["-x", "-o", &format!("-l{id}"), &out])
-        .status()?;
-    println!("screenshot: {} ({status})", out);
+    let shoot = |path: &str| -> Result<(), Box<dyn std::error::Error>> {
+        let status = std::process::Command::new("screencapture")
+            .args(["-x", "-o", &format!("-l{id}"), path])
+            .status()?;
+        println!("screenshot: {path} ({status})");
+        Ok(())
+    };
+    shoot(&out)?;
+
+    // Swap the instrument while the window is open, through the same path a
+    // DAW's project load and the strip's button take.
+    if let Some(other) = std::env::var_os("SWAP_TO") {
+        let other = std::path::PathBuf::from(other);
+        let preset = tactus_nks::Preset::read(&other)?;
+        let saved = tactus_shim::state::SavedState {
+            preset: Some(other.clone()),
+            bundle: "/Library/Audio/Plug-Ins/VST3/Massive X.vst3".into(),
+            cid: tactus_plugin_host::class_id(preset.plugin.vst3_uid.ok_or("no VST3 id")?),
+            plugin_state: preset.plugin_state.clone(),
+        };
+        shim.load_state(&saved.to_bytes())?;
+        println!("swapped to {} with the window open", preset.info.name);
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(seconds) {
+            let _ = shim.process_block(512);
+            pump_main_run_loop(Duration::from_millis(10));
+        }
+        shoot(&out.replace(".png", "-swapped.png"))?;
+    }
     // SAFETY: detach before the view and window go.
     unsafe { view.removed() };
     drop(view);

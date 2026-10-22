@@ -41,6 +41,7 @@ use tactus_plugin_host::{Audio, Input, MAX_EVENTS, MAX_PARAM_CHANGES, PARAM_VALU
 use crate::instrument::{self, Instrument};
 use crate::keyboard::{Command, Keyboard, KnobData, Screen};
 use crate::state::SavedState;
+use crate::view::{Editor, FrameView};
 
 /// `restartComponent` flags the frame raises towards the DAW.
 const PARAM_TITLES_CHANGED: i32 = 1 << 4;
@@ -65,6 +66,8 @@ struct Main {
     /// Parameter ids on the keyboard's pages. Value updates for anything
     /// else are not sent: the agent rejects ids its page does not hold.
     on_screen: std::collections::HashSet<u32>,
+    /// The open window, if any.
+    editor: Option<Arc<Editor>>,
 }
 
 /// State the audio thread renders with.
@@ -112,6 +115,7 @@ impl Default for Frame {
                 held: [false; 128],
                 sent_transport: (false, 0),
                 on_screen: std::collections::HashSet::new(),
+                editor: None,
             }),
             rt: Mutex::new(Rt {
                 audio: None,
@@ -300,13 +304,37 @@ impl Main {
         self.active = on;
     }
 
-    /// Replace the instrument, keeping the engine's running state.
+    /// The strip's text: preset and plugin.
+    fn label(&self) -> String {
+        match self.instrument.as_ref().and_then(|i| i.preset.as_ref()) {
+            Some(p) => format!(
+                "{} — {}",
+                p.info.name,
+                p.plugin.name.clone().unwrap_or_default()
+            ),
+            None if self.instrument.is_some() => "Restored instrument".into(),
+            None => "No instrument — choose a preset".into(),
+        }
+    }
+
+    /// Replace the instrument, keeping the engine's running state. An open
+    /// window loses the old instrument's view first and gets the new one.
     fn replace(&mut self, rt: &Mutex<Rt>, new: Instrument) {
+        if let Some(ed) = &self.editor {
+            ed.detach_inner();
+        }
         let was_active = self.active;
         self.set_active(rt, false);
         self.instrument = Some(new);
         if was_active {
             self.set_active(rt, true);
+        }
+        if let Some(ed) = self.editor.clone() {
+            let label = self.label();
+            ed.attach_inner(
+                self.instrument.as_ref().map(|i| i.plugin.edit_controller()),
+                &label,
+            );
         }
         self.restart(PARAM_TITLES_CHANGED | PARAM_VALUES_CHANGED);
         self.show();
@@ -404,6 +432,44 @@ impl Main {
     }
 }
 
+/// The strip's button: load the chosen preset's instrument.
+pub(crate) fn choose_preset(shared: &Shared, path: &Path) {
+    match Instrument::from_preset(path) {
+        Ok(new) => {
+            if let Ok(mut main) = shared.main.lock() {
+                main.replace(&shared.rt, new);
+            }
+        }
+        Err(e) => eprintln!("tactus-shim: {}: {e}", path.display()),
+    }
+}
+
+/// The window opened: attach the instrument's view.
+pub(crate) fn editor_opened(shared: &Shared, editor: &Arc<Editor>) {
+    if let Ok(mut main) = shared.main.lock() {
+        main.editor = Some(Arc::clone(editor));
+        let label = main.label();
+        editor.attach_inner(
+            main.instrument.as_ref().map(|i| i.plugin.edit_controller()),
+            &label,
+        );
+    }
+}
+
+/// The window closed.
+pub(crate) fn editor_closed(shared: &Shared) {
+    if let Ok(mut main) = shared.main.lock() {
+        main.editor = None;
+    }
+}
+
+/// The window's size before it is attached. Plugins generally know their
+/// size only once attached, so the frame starts small and asks the DAW for
+/// the real size on attachment.
+pub(crate) fn preview_size(_shared: &Shared, _r: &mut ViewRect) -> Option<()> {
+    None
+}
+
 extern "C" fn on_timer(_timer: core_foundation::runloop::CFRunLoopTimerRef, info: *mut c_void) {
     // SAFETY: info is the Arc reference the timer owns; it outlives the timer.
     let shared = unsafe { &*(info as *const Shared) };
@@ -479,6 +545,9 @@ impl IPluginBaseTrait for Frame {
     unsafe fn terminate(&self) -> tresult {
         self.stop_timer();
         if let Ok(mut main) = self.shared.main.lock() {
+            if let Some(ed) = main.editor.take() {
+                ed.detach_inner();
+            }
             main.set_active(&self.shared.rt, false);
             main.keyboard = None;
             main.handler = None;
@@ -906,10 +975,11 @@ impl IEditControllerTrait for Frame {
     }
 
     unsafe fn createView(&self, name: FIDString) -> *mut IPlugView {
-        // The frame's window is the instrument's own window.
-        with_controller(self, std::ptr::null_mut(), |c| unsafe {
-            c.createView(name)
-        })
+        // The instrument's own window, with the settings strip above it.
+        if name.is_null() || unsafe { std::ffi::CStr::from_ptr(name) } != c"editor" {
+            return std::ptr::null_mut();
+        }
+        FrameView::create(Arc::downgrade(&self.shared))
     }
 }
 

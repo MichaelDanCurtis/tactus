@@ -15,6 +15,7 @@ mod frame;
 mod instrument;
 mod keyboard;
 pub mod state;
+mod view;
 
 use std::ffi::{CString, c_char, c_void};
 

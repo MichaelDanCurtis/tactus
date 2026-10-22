@@ -41,8 +41,8 @@ The known gaps at the first playable milestone are listed in
 
 ## Shim
 
-- **Settings strip** in the frame's window: plugin, preset folder, keyboard.
-  Until then `~/Library/Application Support/tactus/shim.conf`.
+- **Keyboard selector** in the strip; one keyboard is assumed. The default
+  preset for a fresh shim still comes from `shim.conf`.
 - **Transport buttons in a DAW:** VST3 gives a plugin no host-transport
   control. Options: send MIDI Machine Control, or let full mode bridge to the
   DAW's own control surface protocol.

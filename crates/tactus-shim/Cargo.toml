@@ -16,10 +16,11 @@ tactus-odr = { path = "../tactus-odr" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
-
-[dev-dependencies]
-tactus-io = { path = "../tactus-io" }
-cpal = "0.18"
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
+
+[dev-dependencies]
+# tactus-nks comes in through [dependencies] already.
+tactus-io = { path = "../tactus-io" }
+cpal = "0.18"
