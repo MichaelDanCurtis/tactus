@@ -305,6 +305,20 @@ pub struct Knob<'a> {
 /// The most knobs one NKS1 section can place.
 pub const KNOBS_PER_SECTION: usize = 8;
 
+/// The most pages an NKS1 layout can address: the view address is a byte.
+pub const MAX_PAGES: usize = 256;
+
+/// A section header over a run of knob slots, as an NKS1 page shows it.
+///
+/// A page is a list of these; its slots together fill at most eight knobs.
+#[derive(Debug, Clone)]
+pub struct KnobSection<'a> {
+    /// Header text. Empty draws no header.
+    pub name: &'a str,
+    /// Knob slots in order. `None` leaves a knob unassigned.
+    pub knobs: Vec<Option<Knob<'a>>>,
+}
+
 /// Transport position, as the device shows it on the Play/Stop buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
@@ -714,97 +728,25 @@ impl Client {
         section_name: &str,
         knobs: &[Knob<'_>],
     ) -> Result<(), OdrError> {
-        if knobs.len() > KNOBS_PER_SECTION {
-            return Err(OdrError::Decode(format!(
-                "{} knobs given; an NKS1 section holds at most {KNOBS_PER_SECTION}",
-                knobs.len()
-            )));
-        }
-        let s = |t: &str| Value::String(t.into());
-        let map = |pairs: Vec<(&str, Value)>| {
-            Value::Map(pairs.into_iter().map(|(k, v)| (s(k), v)).collect())
+        let section = KnobSection {
+            name: section_name,
+            knobs: knobs.iter().copied().map(Some).collect(),
         };
+        self.set_parameter_layout(serial, plugin_name, &[vec![section]], 0)
+    }
 
-        // parameters: {id: {continuous_parameter: {parameter_value, parameter_style}}}
-        let parameters = Value::Map(
-            knobs
-                .iter()
-                .map(|k| {
-                    let entry = map(vec![(
-                        "continuous_parameter",
-                        map(vec![
-                            (
-                                "parameter_value",
-                                map(vec![
-                                    ("value", Value::F64(k.value)),
-                                    ("display_value", s(k.display)),
-                                ]),
-                            ),
-                            (
-                                "parameter_style",
-                                map(vec![("knob_parameter_style", Value::Nil)]),
-                            ),
-                        ]),
-                    )]);
-                    (Value::from(k.id), entry)
-                })
-                .collect(),
-        );
-
-        // One page, one section, one placement per knob.
-        let placements = Value::Array(
-            knobs
-                .iter()
-                .map(|k| map(vec![("id", Value::from(k.id)), ("name", s(k.name))]))
-                .collect(),
-        );
-        let layout = map(vec![
-            (
-                "nks1_layout",
-                Value::Array(vec![Value::Array(vec![map(vec![
-                    ("section_name", s(section_name)),
-                    ("parameters", placements),
-                ])])]),
-            ),
-            ("nks2_layout", Value::Nil),
-        ]);
-
-        // Colours: {r, g, b}, confirmed to parse. A neutral blue for now.
-        let rgb = |r: u32, g: u32, b: u32| {
-            map(vec![
-                ("r", Value::from(r)),
-                ("g", Value::from(g)),
-                ("b", Value::from(b)),
-            ])
-        };
-
-        // Which view the device shows. Decompiled
-        // (convert_variant_with_symbol_registry<…nks1/nks2_view_address…>,
-        // 0x1002e0b64): a one-entry map whose value, for NKS1, must be a
-        // positive integer <= 255 — the page index. force_host_viewstate asks
-        // the device to show the host's view rather than its own.
-        let viewstate = map(vec![
-            (
-                "view_address",
-                map(vec![("nks1_view_address", Value::from(0u32))]),
-            ),
-            ("force_host_viewstate", Value::Boolean(true)),
-        ]);
-
-        let body = map(vec![
-            (
-                "plugin_data",
-                map(vec![
-                    ("name", s(plugin_name)),
-                    ("background", Value::Nil),
-                    ("parameters", parameters),
-                    ("plugin_color", rgb(40, 110, 230)),
-                    ("nks_control_color", rgb(40, 110, 230)),
-                ]),
-            ),
-            ("device_owned_viewstate", viewstate),
-            ("host_owned_viewstate", layout),
-        ]);
+    /// Publish a full NKS1 layout: several pages, each a run of sections.
+    ///
+    /// This is the shape an NKS preset describes, so a preset's pages can be
+    /// sent as they are. `show_page` selects the page on screen.
+    pub fn set_parameter_layout(
+        &mut self,
+        serial: &str,
+        plugin_name: &str,
+        pages: &[Vec<KnobSection<'_>>],
+        show_page: usize,
+    ) -> Result<(), OdrError> {
+        let body = parameter_page_body(plugin_name, pages, show_page)?;
         let args = self.device_args(serial, vec![body]);
         self.notify_symbol("client_parameter_page_set_data", args)
     }
@@ -1089,9 +1031,247 @@ enum Classified {
     Other,
 }
 
+fn s(t: &str) -> Value {
+    Value::String(t.into())
+}
+
+fn map(pairs: Vec<(&str, Value)>) -> Value {
+    Value::Map(pairs.into_iter().map(|(k, v)| (s(k), v)).collect())
+}
+
+/// Build the `client_parameter_page_set_data` body. Kept apart from the
+/// socket so its shape can be tested.
+fn parameter_page_body(
+    plugin_name: &str,
+    pages: &[Vec<KnobSection<'_>>],
+    show_page: usize,
+) -> Result<Value, OdrError> {
+    if pages.len() > MAX_PAGES {
+        return Err(OdrError::Decode(format!(
+            "{} pages given; an NKS1 view address selects at most {MAX_PAGES}",
+            pages.len()
+        )));
+    }
+    if show_page >= pages.len().max(1) {
+        return Err(OdrError::Decode(format!(
+            "page {show_page} requested of {}",
+            pages.len()
+        )));
+    }
+    for (i, page) in pages.iter().enumerate() {
+        let slots: usize = page.iter().map(|sec| sec.knobs.len()).sum();
+        if slots > KNOBS_PER_SECTION {
+            return Err(OdrError::Decode(format!(
+                "page {i} has {slots} knob slots; an NKS1 page holds at most {KNOBS_PER_SECTION}"
+            )));
+        }
+    }
+
+    // parameters: {id: {continuous_parameter: {parameter_value, parameter_style}}}
+    // One entry per id; a preset may place the same parameter on two pages.
+    let mut seen = std::collections::HashSet::new();
+    let parameters = Value::Map(
+        pages
+            .iter()
+            .flatten()
+            .flat_map(|sec| sec.knobs.iter().flatten())
+            .filter(|k| seen.insert(k.id))
+            .map(|k| {
+                let entry = map(vec![(
+                    "continuous_parameter",
+                    map(vec![
+                        (
+                            "parameter_value",
+                            map(vec![
+                                ("value", Value::F64(k.value)),
+                                ("display_value", s(k.display)),
+                            ]),
+                        ),
+                        (
+                            "parameter_style",
+                            map(vec![("knob_parameter_style", Value::Nil)]),
+                        ),
+                    ]),
+                )]);
+                (Value::from(k.id), entry)
+            })
+            .collect(),
+    );
+
+    // nks1_layout: [page], a page is [section], a section is
+    // {section_name, parameters: [{id, name} | nil]}.
+    let layout_pages = pages
+        .iter()
+        .map(|page| {
+            Value::Array(
+                page.iter()
+                    .map(|sec| {
+                        let placements = sec
+                            .knobs
+                            .iter()
+                            .map(|k| match k {
+                                Some(k) => {
+                                    map(vec![("id", Value::from(k.id)), ("name", s(k.name))])
+                                }
+                                None => Value::Nil,
+                            })
+                            .collect();
+                        map(vec![
+                            ("section_name", s(sec.name)),
+                            ("parameters", Value::Array(placements)),
+                        ])
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    let layout = map(vec![
+        ("nks1_layout", Value::Array(layout_pages)),
+        ("nks2_layout", Value::Nil),
+    ]);
+
+    // Colours: {r, g, b}, confirmed to parse. A neutral blue for now.
+    let rgb = |r: u32, g: u32, b: u32| {
+        map(vec![
+            ("r", Value::from(r)),
+            ("g", Value::from(g)),
+            ("b", Value::from(b)),
+        ])
+    };
+
+    // Which view the device shows. Decompiled
+    // (convert_variant_with_symbol_registry<…nks1/nks2_view_address…>,
+    // 0x1002e0b64): a one-entry map whose value, for NKS1, must be an integer
+    // <= 255 — the page index. force_host_viewstate asks the device to show
+    // the host's view rather than its own.
+    let viewstate = map(vec![
+        (
+            "view_address",
+            map(vec![("nks1_view_address", Value::from(show_page as u64))]),
+        ),
+        ("force_host_viewstate", Value::Boolean(true)),
+    ]);
+
+    Ok(map(vec![
+        (
+            "plugin_data",
+            map(vec![
+                ("name", s(plugin_name)),
+                ("background", Value::Nil),
+                ("parameters", parameters),
+                ("plugin_color", rgb(40, 110, 230)),
+                ("nks_control_color", rgb(40, 110, 230)),
+            ]),
+        ),
+        ("device_owned_viewstate", viewstate),
+        ("host_owned_viewstate", layout),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
+
     use super::*;
+
+    fn knob(id: u32, name: &str) -> Knob<'_> {
+        Knob {
+            id,
+            name,
+            value: 0.5,
+            display: "",
+        }
+    }
+
+    fn get<'a>(v: &'a Value, key: &str) -> &'a Value {
+        match v {
+            Value::Map(m) => m
+                .iter()
+                .find(|(k, _)| k.as_str() == Some(key))
+                .map(|(_, v)| v)
+                .unwrap_or_else(|| panic!("no key {key}")),
+            _ => panic!("not a map looking for {key}"),
+        }
+    }
+
+    #[test]
+    fn a_layout_carries_every_page_its_sections_and_empty_slots() {
+        let pages = vec![
+            vec![
+                KnobSection {
+                    name: "Filter",
+                    knobs: vec![Some(knob(10, "Cutoff")), None],
+                },
+                KnobSection {
+                    name: "Amp",
+                    knobs: vec![Some(knob(20, "Attack"))],
+                },
+            ],
+            vec![KnobSection {
+                name: "Global",
+                knobs: vec![Some(knob(0, "Volume"))],
+            }],
+        ];
+        let body = parameter_page_body("Super 8", &pages, 1).unwrap();
+
+        let layout = get(get(&body, "host_owned_viewstate"), "nks1_layout");
+        let Value::Array(layout) = layout else {
+            panic!("layout is not a list")
+        };
+        assert_eq!(layout.len(), 2);
+        let Value::Array(first) = &layout[0] else {
+            panic!("page is not a list")
+        };
+        assert_eq!(first.len(), 2);
+        assert_eq!(get(&first[0], "section_name").as_str(), Some("Filter"));
+        let Value::Array(slots) = get(&first[0], "parameters") else {
+            panic!("parameters is not a list")
+        };
+        assert_eq!(get(&slots[0], "name").as_str(), Some("Cutoff"));
+        assert!(slots[1].is_nil());
+
+        let view = get(get(&body, "device_owned_viewstate"), "view_address");
+        assert_eq!(get(view, "nks1_view_address").as_u64(), Some(1));
+    }
+
+    #[test]
+    fn a_parameter_placed_twice_is_defined_once() {
+        let pages = vec![
+            vec![KnobSection {
+                name: "A",
+                knobs: vec![Some(knob(7, "Cutoff"))],
+            }],
+            vec![KnobSection {
+                name: "B",
+                knobs: vec![Some(knob(7, "Cutoff"))],
+            }],
+        ];
+        let body = parameter_page_body("x", &pages, 0).unwrap();
+        let Value::Map(params) = get(get(&body, "plugin_data"), "parameters") else {
+            panic!("parameters is not a map")
+        };
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn a_page_over_eight_slots_is_refused_before_sending() {
+        let section = KnobSection {
+            name: "Too many",
+            knobs: vec![None; KNOBS_PER_SECTION + 1],
+        };
+        assert!(parameter_page_body("x", &[vec![section]], 0).is_err());
+    }
+
+    #[test]
+    fn showing_a_page_that_does_not_exist_is_refused() {
+        let section = KnobSection {
+            name: "One",
+            knobs: vec![Some(knob(1, "A"))],
+        };
+        assert!(parameter_page_body("x", &[vec![section]], 1).is_err());
+        // An empty layout is valid, showing page 0.
+        assert!(parameter_page_body("x", &[], 0).is_ok());
+    }
 
     #[test]
     fn registry_maps_both_directions() {

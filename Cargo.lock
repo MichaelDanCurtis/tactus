@@ -845,6 +845,7 @@ name = "tactus-odr"
 version = "0.1.0"
 dependencies = [
  "rmpv",
+ "tactus-nks",
  "thiserror 2.0.21",
 ]
 

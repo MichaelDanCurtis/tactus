@@ -11,3 +11,4 @@ rmpv = "1.3"
 thiserror = "2"
 
 [dev-dependencies]
+tactus-nks = { path = "../tactus-nks" }
