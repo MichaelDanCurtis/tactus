@@ -26,13 +26,19 @@
 //! payload arrives as `{"218": 220}` and means `{page: browser}`. [`Registry`]
 //! exists to make that readable.
 //!
-//! # Two quirks worth knowing
+//! # The confirmed sequence
 //!
-//! - **The first request on a connection is consumed.** It establishes the
-//!   session and never gets a response. [`Client::connect`] spends one
-//!   automatically so callers never see it.
-//! - **The agent's greeting is a response to a request nobody made**, carrying
-//!   `ipc_protocol_version` and the attached devices.
+//! Verified on an S88 MK3 against agent `2.0.7 (R15)`, with Komplete Kontrol
+//! closed:
+//!
+//! 1. Write the 16-byte UUID prelude — done by [`Client::connect`].
+//! 2. [`Client::instance_hello`].
+//! 3. [`Client::connect_device`] — attaches the device; the keyboard leaves
+//!    MIDI mode for its host UI.
+//! 4. [`Client::request_focus`] — required, and it lapses when idle.
+//! 5. Device calls: [`Client::set_leds`], [`Client::notification`], …
+//!
+//! Every device call takes `(instance_uuid, serial, …)` in that order.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -50,6 +56,12 @@ use thiserror::Error;
 /// Where the vendor's agent listens.
 pub const DEFAULT_SOCKET: &str =
     "/Users/Shared/Native Instruments/com.native-instruments.odr_agent.kks";
+
+/// `ipc_protocol_version` to declare when the agent's greeting does not say.
+///
+/// Matches agent `2.0.7 (R15)`, the version the working sequence was
+/// confirmed against. Newer agents announce their own, which takes precedence.
+pub const FALLBACK_IPC_VERSION: &str = "2.1.0";
 
 /// Largest frame we will accept, so a corrupt length cannot ask us to
 /// allocate the heap.
@@ -416,15 +428,18 @@ impl Client {
 
     /// Identify this connection as a client instance.
     ///
-    /// **Required before the display API exists.** An unidentified connection
-    /// is served only six device-management methods; `instance_hello`
-    /// registers the client role and with it `client_set_page`,
-    /// `send_global_notification`, `client_mixer_set_trackinfo` and the rest.
+    /// Step one of the sequence confirmed on hardware — see
+    /// `docs/protocol/mk3-odr-ipc.md`. Sent by **string name**; everything
+    /// after it is sent by registry id.
     ///
-    /// The reply carries the agent's version, its `ipc_protocol_version` and
-    /// the attached devices — the same payload this crate also reads as the
-    /// connection greeting, because that *is* what it is.
+    /// `ipc_protocol_version` is taken from the agent's own greeting where
+    /// available, so the client declares the version the agent speaks. A
+    /// mismatch here was one of four differences between this crate's
+    /// failing attempts and the working sequence.
     pub fn instance_hello(&mut self, name: &str, version: &str) -> Result<Value, OdrError> {
+        let ipc = self
+            .agent_ipc_version()
+            .unwrap_or_else(|| FALLBACK_IPC_VERSION.to_owned());
         let args = vec![
             Value::String(self.instance_id.clone().into()),
             Value::Map(vec![
@@ -436,41 +451,92 @@ impl Client {
                             Value::String("version".into()),
                             Value::String(version.into()),
                         ),
+                        (
+                            Value::String("type".into()),
+                            Value::String("standalone".into()),
+                        ),
                     ]),
                 ),
                 (
                     Value::String("ipc_protocol_version".into()),
-                    Value::String(version.into()),
+                    Value::String(ipc.into()),
                 ),
             ]),
         ];
-        // `call_named` matches the reply by msgid, so a success here is a real
-        // answer to this request -- not the unsolicited connect greeting,
-        // which is also shaped `[1, id, nil, {...}]` and fooled an earlier
-        // version of this check.
-        //
-        // Note: a successful reply does **not** prove the agent registered
-        // this client. The vendor's own log is the only confirmation of that,
-        // and registration is currently unresolved -- see
-        // docs/protocol/mk3-odr-ipc.md. `is_identified` therefore means "the
-        // handshake was answered", not "the display API will work".
+        // Matched by msgid, so this is a real answer to the request -- not
+        // the unsolicited connect greeting, which has the same shape.
         let reply = self.call_named("instance_hello", args, Duration::from_secs(3))?;
         self.identified = true;
         Ok(reply)
     }
 
-    /// Whether [`Client::instance_hello`] was *answered* on this connection.
+    /// The `ipc_protocol_version` the agent announced on connect.
+    fn agent_ipc_version(&self) -> Option<String> {
+        let Some(Value::Map(fields)) = &self.greeting else {
+            return None;
+        };
+        fields.iter().find_map(|(k, v)| {
+            if k.as_str() == Some("ipc_protocol_version") {
+                v.as_str().map(str::to_owned)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Whether [`Client::instance_hello`] was answered on this connection.
     ///
-    /// Deliberately not named "registered": the agent answers the handshake
-    /// without necessarily entering the client into its instance manager, and
-    /// the display calls fail on that lookup. See the crate docs.
+    /// Answered, not attached: until [`Client::connect_device`] succeeds the
+    /// agent has no device for this instance.
     pub fn is_identified(&self) -> bool {
         self.identified
     }
 
-    /// This connection's instance id, which every display call carries.
+    /// This connection's instance id, which every device call carries first.
     pub fn instance_id(&self) -> &str {
         &self.instance_id
+    }
+
+    /// Attach a device to this instance.
+    ///
+    /// **The step this crate's earlier attempts never made.** Without it the
+    /// agent has no device for the instance, and every display or LED call
+    /// fails with `no such device <instance>`. Together with
+    /// [`Client::request_focus`] it is what moves the keyboard out of MIDI
+    /// mode into its host UI — observed on hardware as the screen changing to
+    /// "no instrument loaded".
+    pub fn connect_device(&mut self, serial: &str) -> Result<Value, OdrError> {
+        let args = self.device_args(serial, vec![]);
+        self.call("connect_device", args, Duration::from_secs(3))
+    }
+
+    /// Ask the agent for control of the device's surface.
+    ///
+    /// Required: without focus, LED and page messages are discarded. Focus
+    /// also **lapses after a short idle period**, so a long-running host
+    /// should re-assert it — about once a second works, per prior art.
+    pub fn request_focus(&mut self, serial: &str) -> Result<(), OdrError> {
+        let args = self.device_args(serial, vec![]);
+        self.notify_symbol("client_request_focus", args)
+    }
+
+    /// Set the light guide.
+    ///
+    /// `leds` pairs a **MIDI note** (not a key position; the array has 128
+    /// slots) with a colour byte. Confirmed values: green `0x1C`, red `0x04`,
+    /// off `0x00`.
+    pub fn set_leds(&mut self, serial: &str, leds: &[(u8, u8)]) -> Result<(), OdrError> {
+        let key = self
+            .registry
+            .id("client_midi_addressing")
+            .ok_or_else(|| OdrError::UnknownMethod("client_midi_addressing".to_owned()))?;
+        let array = Value::Array(
+            leds.iter()
+                .map(|&(note, colour)| Value::Array(vec![Value::from(note), Value::from(colour)]))
+                .collect(),
+        );
+        let args = self.device_args(serial, vec![Value::Map(vec![(Value::from(key), array)])]);
+        self.notify_symbol("client_lightguide_set_leds", args)
     }
 
     /// Select which page the device shows.
@@ -478,43 +544,65 @@ impl Client {
     /// `page` is a symbol index: `browser`, `mixer`, `parameter` and so on
     /// resolve through [`Client::registry`].
     pub fn set_page(&mut self, serial: &str, page: u32) -> Result<(), OdrError> {
-        self.notify_named(
-            "client_set_page",
-            vec![
-                Value::String(serial.into()),
-                Value::String(self.instance_id.clone().into()),
-                Value::from(page),
-            ],
-        )
+        let args = self.device_args(serial, vec![Value::from(page)]);
+        self.notify_symbol("client_set_page", args)
     }
 
-    /// Show a notification on the device.
+    /// Show a notification on the device's screen.
     ///
-    /// The smallest thing that puts host-supplied content on screen, which
-    /// makes it the natural first call to try against new hardware.
-    pub fn notification(&mut self, serial: &str, text: &str) -> Result<(), OdrError> {
-        self.notify_named(
-            "send_global_notification",
-            vec![
-                Value::String(serial.into()),
-                Value::String(self.instance_id.clone().into()),
-                Value::Map(vec![(
-                    Value::String("text".into()),
-                    Value::String(text.into()),
-                )]),
-            ],
-        )
+    /// The six fields are the ones the agent itself listed as required.
+    pub fn notification(
+        &mut self,
+        serial: &str,
+        title: &str,
+        description: &str,
+    ) -> Result<(), OdrError> {
+        let s = |t: &str| Value::String(t.into());
+        let body = Value::Map(vec![(
+            s("notification"),
+            Value::Map(vec![
+                (s("level"), s("info")),
+                (s("title"), s(title)),
+                (s("description"), s(description)),
+                (s("url_message"), s("")),
+                (s("url"), s("")),
+                (s("blocking_state"), s("non_blocking")),
+            ]),
+        )]);
+        let args = self.device_args(serial, vec![body]);
+        self.notify_symbol("send_global_notification", args)
     }
 
-    /// Ask the agent for control of the device's surface.
-    pub fn request_focus(&mut self, serial: &str) -> Result<(), OdrError> {
-        self.notify_named(
-            "client_request_focus",
-            vec![
-                Value::String(serial.into()),
-                Value::String(self.instance_id.clone().into()),
-            ],
-        )
+    /// `[instance_uuid, serial, extra...]` — the order every device call uses.
+    ///
+    /// This crate originally sent `(serial, instance)`, which the agent reads
+    /// as "the device is this instance uuid" and rejects. Centralised so the
+    /// order cannot drift between calls again.
+    fn device_args(&self, serial: &str, extra: Vec<Value>) -> Vec<Value> {
+        let mut v = vec![
+            Value::String(self.instance_id.clone().into()),
+            Value::String(serial.into()),
+        ];
+        v.extend(extra);
+        v
+    }
+
+    /// The wire form of a method: its registry id when known, else its name.
+    fn method_value(&self, name: &str) -> Value {
+        match self.registry.id(name) {
+            Some(id) => Value::from(id),
+            None => Value::String(name.into()),
+        }
+    }
+
+    /// Send a notification, by registry id where the registry has one.
+    pub fn notify_symbol(&mut self, method: &str, params: Vec<Value>) -> Result<(), OdrError> {
+        let m = self.method_value(method);
+        self.send(Value::Array(vec![
+            Value::from(2u32),
+            m,
+            Value::Array(params),
+        ]))
     }
 
     /// Send a notification with a method named by string.

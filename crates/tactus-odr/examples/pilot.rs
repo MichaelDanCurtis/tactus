@@ -24,6 +24,20 @@ use tactus_odr::{Client, OdrError, Registry};
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 
+// Colour bytes confirmed on hardware.
+const GREEN: u8 = 0x1C;
+const RED: u8 = 0x04;
+const OFF: u8 = 0x00;
+
+/// Wait `secs`, re-asserting focus once a second — it lapses when idle.
+fn hold(client: &mut Client, serial: &str, secs: u64) -> Result<(), OdrError> {
+    for _ in 0..secs {
+        std::thread::sleep(Duration::from_secs(1));
+        client.request_focus(serial)?;
+    }
+    Ok(())
+}
+
 fn show(label: &str, v: &Value) {
     let text = format!("{v}");
     if text.len() > 900 {
@@ -122,42 +136,45 @@ fn main() -> Result<(), OdrError> {
         Err(e) => println!("  {e}"),
     }
 
-    // ---- identify, then drive the display ----------------------------
-    //
-    // Until instance_hello succeeds the agent serves only six
-    // device-management methods. It is what turns on the display API.
+    // ---- the confirmed sequence ------------------------------------
     println!("\ninstance_hello (instance {}):", client.instance_id());
-    match client.instance_hello("tactus-pilot", "2.2.0") {
-        // Answered is not the same as registered; the agent can reply and
-        // still not enter us into its instance manager.
-        Ok(_) => println!("  answered (NOT proof of registration — see docs)"),
+    if let Err(e) = client.instance_hello("tactus-pilot", "0.1.0") {
+        println!("  {e}");
+        return Ok(());
+    }
+    println!("  answered");
+
+    println!("\nconnect_device:");
+    match client.connect_device(&serial) {
+        Ok(v) => println!("  {v}"),
         Err(e) => {
             println!("  {e}");
             return Ok(());
         }
     }
+    client.request_focus(&serial)?;
+    println!("focus requested — the keyboard should now show its host UI");
 
-    println!("\nclient_request_focus:");
-    match client.request_focus(&serial) {
-        Ok(()) => println!("  sent"),
-        Err(e) => println!("  {e}"),
-    }
+    // MIDI notes 21..=108 are the 88 keys. Green sweep, then red on each C.
+    let all: Vec<(u8, u8)> = (21u8..=108).map(|n| (n, GREEN)).collect();
+    client.set_leds(&serial, &all)?;
+    println!("\nlight guide: all green");
+    hold(&mut client, &serial, 3)?;
 
-    // The smallest host-supplied thing that can appear on the screen.
-    println!("\nsend_global_notification \"hello from tactus\":");
-    match client.notification(&serial, "hello from tactus") {
-        Ok(()) => println!("  sent (the agent's own log is what says whether it worked)"),
-        Err(e) => println!("  {e}"),
-    }
+    let cs: Vec<(u8, u8)> = (21u8..=108)
+        .map(|n| (n, if n % 12 == 0 { RED } else { OFF }))
+        .collect();
+    client.set_leds(&serial, &cs)?;
+    println!("light guide: red on every C");
+    hold(&mut client, &serial, 3)?;
 
-    // Page indices are symbols: browser / mixer / parameter / smartplay.
-    if let Some(page) = client.registry().id("browser") {
-        println!("\nclient_set_page -> browser ({page}):");
-        match client.set_page(&serial, page) {
-            Ok(()) => println!("  sent (the agent's own log is what says whether it worked)"),
-            Err(e) => println!("  {e}"),
-        }
-    }
+    client.notification(&serial, "TACTUS", "hello from tactus")?;
+    println!("\nnotification sent");
+    hold(&mut client, &serial, 4)?;
+
+    let off: Vec<(u8, u8)> = (21u8..=108).map(|n| (n, OFF)).collect();
+    client.set_leds(&serial, &off)?;
+    println!("light guide: off");
 
     // ---- what the agent volunteers -----------------------------------
     println!("\nlistening 4s for notifications (touch the keyboard):");
