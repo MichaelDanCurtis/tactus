@@ -203,7 +203,89 @@ The distinction between the last two is what makes argument discovery
 possible: *unexpected key* means the dictionary was reached, so arity is
 right; *cannot be parsed* without any key warning means it failed earlier.
 
-## `instance_hello` — partly solved, and the remaining gap
+## `instance_hello` — solved
+
+**Evidence class: host observation**, confirmed by decompiling the handler.
+
+```text
+request  [0, msgid, "instance_hello", [ <instance-uuid-string>, {
+             "client_info": { "name": "<client>", "version": "2.2.0" },
+             "ipc_protocol_version": "2.2.0"
+         } ]]
+
+reply    [1, msgid, nil, { "agent_version": "...", "ipc_protocol_version": "2.1.0",
+                           "available_devices": [...], "registered_assets": [...] }]
+```
+
+The reply payload is the same thing this document earlier called the
+"unsolicited greeting". It was never unsolicited — it is the handshake's
+result, and it only looked spontaneous because the 16-byte prelude problem
+was eating the request that caused it.
+
+### How the keys were found, after guessing failed
+
+Name-guessing cost three rounds across **45 candidates** and found only
+`ipc_protocol_version` — which turned out to be a red herring: it is a key of
+the *reply*, and `match_dictionary_elements` recognises it globally, so "not
+flagged" never meant "belongs to this call".
+
+Decompiling settled it in three steps:
+
+1. The success-path log string `"IPC: instance_hello - {}, client version {},
+   server version {}"` is at `0x10060a292`.
+2. Its only xref, `0x100233888`, lies inside
+   `ipc_server::register_rpc_instance_handling()::$_30`'s dispatch handler at
+   **`0x10023336c`**.
+3. Of that function's 259 distinct reference targets, exactly two resolve to
+   key-shaped strings — and they are adjacent in the string table:
+
+   ```text
+   0x100582780  client_info
+   0x10058278c  ipc_protocol_version
+   ```
+
+`client_info` was never among the 45 guesses. The lesson is the one already
+written into `mk3-midi-mode.md`: read the source of truth first. Static
+analysis gave a definite answer in three queries after name-guessing had
+burned three rounds on a wrong lead.
+
+## Call signatures
+
+**Evidence class: host observation.** Arity came from a third log oracle,
+`dispatcher::args_to_tuple size mismatch: expected N arguments`, which names
+the expected count outright.
+
+| Method | Arity | Signature |
+|---|---|---|
+| `instance_hello` | 2 | `(instance_uuid, {client_info, ipc_protocol_version})` |
+| `client_set_page` | 3 | `(serial, instance_uuid, page_symbol_index)` |
+| `send_global_notification` | 3 | `(serial, instance_uuid, {text})` |
+| `send_client_notification` | 3 | `(serial, instance_uuid, {text})` — assumed by symmetry |
+| `client_request_focus` | 2 | `(serial, instance_uuid)` |
+| `client_release_focus` | 2 | `(serial, instance_uuid)` |
+| `client_metro_flash` | 2 | `(serial, instance_uuid)` |
+| `client_mixer_set_trackinfo` | 3 | `(serial, instance_uuid, payload)` — payload shape unknown |
+| `client_mixer_set_meters` | 3 | as above |
+| `client_lightguide_set_leds` | 3 | as above |
+| `client_browser_set_sounds` | 3 | as above |
+| `client_parameter_page_set_data` | 3 | as above |
+
+The pattern is consistent: **every display call carries the device serial and
+the caller's instance uuid**, then its payload.
+
+`client_set_page`, `send_global_notification` and `client_request_focus` have
+been sent and **accepted without error**. Accepted means the arguments parsed
+— not that the screen changed. That distinction is kept deliberately: nothing
+here has been confirmed visually.
+
+### A crash worth knowing about
+
+Sending `add_asset` with a two-element array ending in a map **aborts the
+agent** (`SIGABRT`, exit 134). Reproduced once, not investigated further. It
+is a robustness bug in the vendor's agent, and a reason to avoid fuzzing this
+interface on a machine doing real work.
+
+## Superseded: the earlier guess at where the display API lives
 
 Established by probing against the log:
 

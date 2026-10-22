@@ -229,6 +229,40 @@ pub struct Notification {
     pub params: Value,
 }
 
+/// Generate a version-4 UUID from the system CSPRNG.
+///
+/// Hand-rolled to keep this crate's dependency list to msgpack and an error
+/// derive. Returns the raw 16 bytes and the canonical hyphenated text, because
+/// the protocol needs **both**: the bytes open the connection and the text
+/// identifies the instance inside it.
+pub fn new_uuid() -> Result<([u8; 16], String), OdrError> {
+    use std::io::Read as _;
+    let mut raw = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut raw))
+        .map_err(|source| OdrError::Io {
+            op: "read /dev/urandom",
+            source,
+        })?;
+    // RFC 4122: version 4, variant 1.
+    if let Some(b) = raw.get_mut(6) {
+        *b = (*b & 0x0F) | 0x40;
+    }
+    if let Some(b) = raw.get_mut(8) {
+        *b = (*b & 0x3F) | 0x80;
+    }
+    let h: Vec<String> = raw.iter().map(|b| format!("{b:02x}")).collect();
+    let text = format!(
+        "{}-{}-{}-{}-{}",
+        h.get(0..4).unwrap_or_default().concat(),
+        h.get(4..6).unwrap_or_default().concat(),
+        h.get(6..8).unwrap_or_default().concat(),
+        h.get(8..10).unwrap_or_default().concat(),
+        h.get(10..16).unwrap_or_default().concat(),
+    );
+    Ok((raw, text))
+}
+
 /// A connected ODR client.
 #[derive(Debug)]
 pub struct Client {
@@ -238,6 +272,8 @@ pub struct Client {
     registry: Registry,
     greeting: Option<Value>,
     pending: Vec<Notification>,
+    instance_id: String,
+    identified: bool,
 }
 
 impl Client {
@@ -248,12 +284,32 @@ impl Client {
     /// for real calls.
     pub fn connect(path: impl AsRef<Path>) -> Result<Self, OdrError> {
         let path = path.as_ref();
-        let mut client = Self::connect_raw(path)?;
-        client.prime()?;
+        let client = Self::connect_raw(path)?;
         Ok(client)
     }
 
     /// Connect and read the greeting, without spending the priming request.
+    /// Connect to the agent's default socket path.
+    pub fn connect_default() -> Result<Self, OdrError> {
+        Self::connect(DEFAULT_SOCKET)
+    }
+
+    /// Connect with a registry supplied by the caller.
+    ///
+    /// The IPC handshake reply carries no symbol registry — only the
+    /// device-facing endpoint sends one — so a client on this socket must be
+    /// given the table. A registry the agent *does* send still wins.
+    pub fn connect_with_registry(
+        path: impl AsRef<Path>,
+        registry: Registry,
+    ) -> Result<Self, OdrError> {
+        let mut c = Self::connect_raw(path)?;
+        if c.registry.is_empty() {
+            c.registry = registry;
+        }
+        Ok(c)
+    }
+
     fn connect_raw(path: impl AsRef<Path>) -> Result<Self, OdrError> {
         let path = path.as_ref();
         let stream = UnixStream::connect(path).map_err(|source| OdrError::Connect {
@@ -266,6 +322,17 @@ impl Client {
                 op: "set_read_timeout",
                 source,
             })?;
+        // The connection opens with 16 RAW UUID bytes, before any framing.
+        // Without them the agent consumes the first 16 bytes of the first
+        // frame as the connection id and that frame is silently lost.
+        let (raw_id, text_id) = new_uuid()?;
+        (&stream)
+            .write_all(&raw_id)
+            .map_err(|source| OdrError::Io {
+                op: "write connection id",
+                source,
+            })?;
+
         let mut client = Self {
             stream,
             buf: Vec::new(),
@@ -273,6 +340,8 @@ impl Client {
             registry: Registry::default(),
             greeting: None,
             pending: Vec::new(),
+            instance_id: text_id,
+            identified: false,
         };
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline && client.greeting.is_none() {
@@ -283,58 +352,13 @@ impl Client {
         Ok(client)
     }
 
-    /// Spend the request the agent consumes without answering.
-    ///
-    /// Observed behaviour: the first request on a connection establishes the
-    /// session and never gets a reply, while the second onward are answered
-    /// normally. Doing it here keeps that quirk out of every caller.
-    fn prime(&mut self) -> Result<(), OdrError> {
-        let Some(id) = self.registry.id("get_devices") else {
-            return Ok(());
-        };
-        let msgid = self.take_id();
-        self.send(Value::Array(vec![
-            Value::from(0u32),
-            Value::from(msgid),
-            Value::from(id),
-            Value::Array(vec![]),
-        ]))?;
-        let until = Instant::now() + Duration::from_millis(600);
-        while Instant::now() < until {
-            let _ = self.read_frame()?;
-        }
-        Ok(())
-    }
-
-    /// Connect to the agent's default socket path.
-    pub fn connect_default() -> Result<Self, OdrError> {
-        Self::connect(DEFAULT_SOCKET)
-    }
-
-    /// Connect with a registry supplied by the caller.
-    ///
-    /// Use this on the local IPC socket, whose greeting carries no registry.
-    /// A registry the agent *does* send still wins, so passing one is safe
-    /// against a future agent that starts including it.
-    pub fn connect_with_registry(
-        path: impl AsRef<Path>,
-        registry: Registry,
-    ) -> Result<Self, OdrError> {
-        let mut c = Self::connect_raw(path)?;
-        if c.registry.is_empty() {
-            c.registry = registry;
-        }
-        c.prime()?;
-        Ok(c)
-    }
-
-    /// The symbol registry the agent sent.
+    /// The symbol registry the agent sent, or the one supplied on connect.
     pub fn registry(&self) -> &Registry {
         &self.registry
     }
 
-    /// The greeting payload, which carries `ipc_protocol_version`,
-    /// `agent_version` and the attached devices.
+    /// The handshake payload: `agent_version`, `ipc_protocol_version` and the
+    /// attached devices.
     pub fn greeting(&self) -> Option<&Value> {
         self.greeting.as_ref()
     }
@@ -368,6 +392,143 @@ impl Client {
             Value::Array(params),
         ]))?;
 
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let Some(frame) = self.read_frame()? else {
+                continue;
+            };
+            match self.classify(frame, msgid) {
+                Classified::Reply(Ok(v)) => return Ok(v),
+                Classified::Reply(Err(message)) => {
+                    return Err(OdrError::Rejected {
+                        method: method.to_owned(),
+                        message,
+                    });
+                }
+                Classified::Other => {}
+            }
+        }
+        Err(OdrError::Timeout {
+            method: method.to_owned(),
+            timeout,
+        })
+    }
+
+    /// Identify this connection as a client instance.
+    ///
+    /// **Required before the display API exists.** An unidentified connection
+    /// is served only six device-management methods; `instance_hello`
+    /// registers the client role and with it `client_set_page`,
+    /// `send_global_notification`, `client_mixer_set_trackinfo` and the rest.
+    ///
+    /// The reply carries the agent's version, its `ipc_protocol_version` and
+    /// the attached devices — the same payload this crate also reads as the
+    /// connection greeting, because that *is* what it is.
+    pub fn instance_hello(&mut self, name: &str, version: &str) -> Result<Value, OdrError> {
+        let args = vec![
+            Value::String(self.instance_id.clone().into()),
+            Value::Map(vec![
+                (
+                    Value::String("client_info".into()),
+                    Value::Map(vec![
+                        (Value::String("name".into()), Value::String(name.into())),
+                        (
+                            Value::String("version".into()),
+                            Value::String(version.into()),
+                        ),
+                    ]),
+                ),
+                (
+                    Value::String("ipc_protocol_version".into()),
+                    Value::String(version.into()),
+                ),
+            ]),
+        ];
+        let reply = self.call_named("instance_hello", args, Duration::from_secs(3))?;
+        self.identified = true;
+        Ok(reply)
+    }
+
+    /// Whether [`Client::instance_hello`] has succeeded on this connection.
+    pub fn is_identified(&self) -> bool {
+        self.identified
+    }
+
+    /// This connection's instance id, which every display call carries.
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    /// Select which page the device shows.
+    ///
+    /// `page` is a symbol index: `browser`, `mixer`, `parameter` and so on
+    /// resolve through [`Client::registry`].
+    pub fn set_page(&mut self, serial: &str, page: u32) -> Result<(), OdrError> {
+        self.notify_named(
+            "client_set_page",
+            vec![
+                Value::String(serial.into()),
+                Value::String(self.instance_id.clone().into()),
+                Value::from(page),
+            ],
+        )
+    }
+
+    /// Show a notification on the device.
+    ///
+    /// The smallest thing that puts host-supplied content on screen, which
+    /// makes it the natural first call to try against new hardware.
+    pub fn notification(&mut self, serial: &str, text: &str) -> Result<(), OdrError> {
+        self.notify_named(
+            "send_global_notification",
+            vec![
+                Value::String(serial.into()),
+                Value::String(self.instance_id.clone().into()),
+                Value::Map(vec![(
+                    Value::String("text".into()),
+                    Value::String(text.into()),
+                )]),
+            ],
+        )
+    }
+
+    /// Ask the agent for control of the device's surface.
+    pub fn request_focus(&mut self, serial: &str) -> Result<(), OdrError> {
+        self.notify_named(
+            "client_request_focus",
+            vec![
+                Value::String(serial.into()),
+                Value::String(self.instance_id.clone().into()),
+            ],
+        )
+    }
+
+    /// Send a notification with a method named by string.
+    ///
+    /// The IPC side exchanges no symbol registry, so its method names go on
+    /// the wire as strings — unlike the device side, which interns them.
+    pub fn notify_named(&mut self, method: &str, params: Vec<Value>) -> Result<(), OdrError> {
+        self.send(Value::Array(vec![
+            Value::from(2u32),
+            Value::String(method.into()),
+            Value::Array(params),
+        ]))
+    }
+
+    /// Call a method named by string and wait for its reply.
+    pub fn call_named(
+        &mut self,
+        method: &str,
+        params: Vec<Value>,
+        timeout: Duration,
+    ) -> Result<Value, OdrError> {
+        let msgid = self.take_id();
+        self.send(Value::Array(vec![
+            Value::from(0u32),
+            Value::from(msgid),
+            Value::String(method.into()),
+            Value::Array(params),
+        ]))?;
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             let Some(frame) = self.read_frame()? else {

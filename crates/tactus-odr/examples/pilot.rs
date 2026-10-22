@@ -8,8 +8,14 @@
 //! symbol registry, the session quirks — by connecting to the agent and
 //! reading live state out of the keyboard.
 //!
-//! This is read-only. It enumerates devices and reads properties and
-//! settings; it writes nothing and changes nothing.
+//! The first half is read-only — enumerate devices, read properties and
+//! settings. The second half **writes**: it identifies as a client instance,
+//! asks for focus, and pushes a notification and a page selection.
+//!
+//! Note the difference between the agent accepting a call and the device
+//! showing something. These calls return no error, which means the arguments
+//! parsed; whether pixels change can only be settled by looking at the
+//! hardware.
 
 use std::time::Duration;
 
@@ -116,6 +122,41 @@ fn main() -> Result<(), OdrError> {
         Err(e) => println!("  {e}"),
     }
 
+    // ---- identify, then drive the display ----------------------------
+    //
+    // Until instance_hello succeeds the agent serves only six
+    // device-management methods. It is what turns on the display API.
+    println!("\ninstance_hello (instance {}):", client.instance_id());
+    match client.instance_hello("tactus-pilot", "2.2.0") {
+        Ok(_) => println!("  accepted — the display API is now registered"),
+        Err(e) => {
+            println!("  {e}");
+            return Ok(());
+        }
+    }
+
+    println!("\nclient_request_focus:");
+    match client.request_focus(&serial) {
+        Ok(()) => println!("  sent"),
+        Err(e) => println!("  {e}"),
+    }
+
+    // The smallest host-supplied thing that can appear on the screen.
+    println!("\nsend_global_notification \"hello from tactus\":");
+    match client.notification(&serial, "hello from tactus") {
+        Ok(()) => println!("  sent — accepted without error"),
+        Err(e) => println!("  {e}"),
+    }
+
+    // Page indices are symbols: browser / mixer / parameter / smartplay.
+    if let Some(page) = client.registry().id("browser") {
+        println!("\nclient_set_page -> browser ({page}):");
+        match client.set_page(&serial, page) {
+            Ok(()) => println!("  sent — accepted without error"),
+            Err(e) => println!("  {e}"),
+        }
+    }
+
     // ---- what the agent volunteers -----------------------------------
     println!("\nlistening 4s for notifications (touch the keyboard):");
     let notes = client.listen(Duration::from_secs(4))?;
@@ -128,6 +169,10 @@ fn main() -> Result<(), OdrError> {
         println!("  {name}: {params}");
     }
 
-    println!("\ndone — no state was changed");
+    println!("\ndone");
+    println!("\nThis run asked for focus and set a page, so it DID change device");
+    println!("state. Reads alone are the earlier section; these last three calls");
+    println!("are writes, and \"accepted without error\" means the agent took the");
+    println!("call — not that anything appeared. Look at the keyboard to judge.");
     Ok(())
 }
