@@ -667,6 +667,28 @@ impl Client {
             ("nks2_layout", Value::Nil),
         ]);
 
+        // Colours: {r, g, b}, confirmed to parse. A neutral blue for now.
+        let rgb = |r: u32, g: u32, b: u32| {
+            map(vec![
+                ("r", Value::from(r)),
+                ("g", Value::from(g)),
+                ("b", Value::from(b)),
+            ])
+        };
+
+        // Which view the device shows. Decompiled
+        // (convert_variant_with_symbol_registry<…nks1/nks2_view_address…>,
+        // 0x1002e0b64): a one-entry map whose value, for NKS1, must be a
+        // positive integer <= 255 — the page index. force_host_viewstate asks
+        // the device to show the host's view rather than its own.
+        let viewstate = map(vec![
+            (
+                "view_address",
+                map(vec![("nks1_view_address", Value::from(0u32))]),
+            ),
+            ("force_host_viewstate", Value::Boolean(true)),
+        ]);
+
         let body = map(vec![
             (
                 "plugin_data",
@@ -674,12 +696,42 @@ impl Client {
                     ("name", s(plugin_name)),
                     ("background", Value::Nil),
                     ("parameters", parameters),
+                    ("plugin_color", rgb(40, 110, 230)),
+                    ("nks_control_color", rgb(40, 110, 230)),
                 ]),
             ),
+            ("device_owned_viewstate", viewstate),
             ("host_owned_viewstate", layout),
         ]);
         let args = self.device_args(serial, vec![body]);
         self.notify_symbol("client_parameter_page_set_data", args)
+    }
+
+    /// Update one knob's value on the published parameter page.
+    ///
+    /// **The device does not own parameter values; the host does.** A knob
+    /// turn arrives as a relative step (`plugin_parameter_value_change
+    /// [id, delta]`) and nothing on screen moves until the host applies it and
+    /// sends the result back through this call. Four arguments, confirmed by
+    /// the agent's own `args_to_tuple size mismatch: expected 4`; the value is
+    /// kind-tagged exactly as in the page.
+    pub fn set_parameter_value(
+        &mut self,
+        serial: &str,
+        id: u32,
+        value: f64,
+        display: &str,
+    ) -> Result<(), OdrError> {
+        let s = |t: &str| Value::String(t.into());
+        let tagged = Value::Map(vec![(
+            s("continuous_parameter"),
+            Value::Map(vec![
+                (s("value"), Value::F64(value)),
+                (s("display_value"), s(display)),
+            ]),
+        )]);
+        let args = self.device_args(serial, vec![Value::from(id), tagged]);
+        self.notify_symbol("client_parameter_page_set_parameter_value", args)
     }
 
     /// `[instance_uuid, serial, extra...]` — the order every device call uses.

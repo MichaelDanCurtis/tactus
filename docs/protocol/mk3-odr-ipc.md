@@ -828,3 +828,60 @@ host_owned_viewstate: {
 - **A placement** is `{id, name}`, both required. `nil` is accepted as an empty
   slot.
 - `nks2_layout: nil` and `nks1_layout: []` are both valid.
+
+## CONFIRMED: a working parameter page with live knobs
+
+**Evidence class: hardware observation, confirmed by the device's owner.** The
+screen showed **TACTUS**, the section **Synth**, and eight named knobs.
+Turning a knob moved its value on screen, tracking the hand.
+
+Two pieces completed it:
+
+**1. The view address.** Without `device_owned_viewstate` the page was
+accepted but not shown. With it, the agent logged nothing at all and the page
+appeared:
+
+```text
+device_owned_viewstate: { view_address: { nks1_view_address: <page index> },
+                          force_host_viewstate: true }
+```
+
+Decompiled (`0x1002e0b64`): a one-entry map keyed by
+`nks_view_address_property`. For NKS1 the value must be a positive integer
+`<= 255`. The agent's own serializer writes it the same way.
+
+**2. The host owns parameter values.** A turn arrives as a relative step,
+`plugin_action {plugin_parameter_value_change: [id, delta]}` (steps of
+about ±0.002–0.006). Nothing on screen moves until the host applies it and
+sends the result back:
+
+```text
+client_parameter_page_set_parameter_value(instance, serial, id,
+    { continuous_parameter: { value, display_value } })
+```
+
+Four arguments, from `args_to_tuple size mismatch: expected 4`; the value is
+kind-tagged, as in the page.
+
+**Touch.** Each knob reports `plugin_parameter_erp_touched: [id, true|false]`
+when a finger lands and lifts, independently of turning. In one 90-second
+session all eight knobs reported: 140 touch events, 1,444 turn steps.
+
+### The complete call, as `tactus-odr` sends it
+
+```text
+client_parameter_page_set_data(instance, serial, {
+  plugin_data: {
+    name, background: nil,
+    parameters: { <id>: { continuous_parameter: {
+        parameter_value: { value, display_value },
+        parameter_style: { knob_parameter_style: nil } } } },
+    plugin_color: { r, g, b }, nks_control_color: { r, g, b } },
+  device_owned_viewstate: { view_address: { nks1_view_address: 0 },
+                            force_host_viewstate: true },
+  host_owned_viewstate: {
+    nks1_layout: [ [ { section_name, parameters: [ { id, name }, … ] } ] ],
+    nks2_layout: nil } })
+```
+
+The agent logs no warnings for it.
