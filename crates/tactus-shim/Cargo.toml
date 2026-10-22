@@ -1,0 +1,22 @@
+[package]
+name = "tactus-shim"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A thin VST3 frame: hosts one instrument inside a DAW and puts it on a Kontrol keyboard"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tactus-plugin-host = { path = "../tactus-plugin-host" }
+tactus-nks = { path = "../tactus-nks", features = ["resources"] }
+tactus-odr = { path = "../tactus-odr" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
+[dev-dependencies]
+tactus-io = { path = "../tactus-io" }
+cpal = "0.18"

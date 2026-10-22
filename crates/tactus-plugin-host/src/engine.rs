@@ -725,6 +725,13 @@ impl Audio {
         self.0.render_planar(outs, inputs)
     }
 
+    /// Use the caller's time information for the next blocks: tempo,
+    /// transport, position. A wrapper passes its own host's context through.
+    pub fn set_process_context(&mut self, context: &ProcessContext) {
+        self.0.context = *context;
+        self.0.context.sampleRate = self.0.sample_rate;
+    }
+
     /// The sample rate the engine was set up for.
     pub fn sample_rate(&self) -> f64 {
         self.0.sample_rate

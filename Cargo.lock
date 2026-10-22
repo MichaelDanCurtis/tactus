@@ -1273,6 +1273,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tactus-shim"
+version = "0.1.0"
+dependencies = [
+ "core-foundation",
+ "cpal",
+ "tactus-io",
+ "tactus-nks",
+ "tactus-odr",
+ "tactus-plugin-host",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,7 +1,7 @@
 [workspace]
 members = ["crates/tactus-core", "crates/tactus-display", "crates/tactus-hid", "crates/tactus-io",
     "crates/tactus-odr", "crates/tactus-midi", "crates/tactus-ffi", "crates/tactus-nks",
-    "crates/tactus-plugin-host"]
+    "crates/tactus-plugin-host", "crates/tactus-shim"]
 resolver = "3"
 
 [workspace.package]

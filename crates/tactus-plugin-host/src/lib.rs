@@ -19,6 +19,9 @@
 mod com;
 mod engine;
 
+/// The VST3 bindings this crate is built on, for wrappers that forward calls.
+pub use vst3;
+
 pub use engine::{
     AFTERTOUCH, Audio, Input, MAX_EVENTS, MAX_PARAM_CHANGES, MidiMap, PITCH_BEND, midi_to_input,
 };
@@ -476,6 +479,12 @@ impl Plugin {
                 (code == kResultOk).then_some((ctrl, id))
             })
             .collect()
+    }
+
+    /// The hosted plugin's edit controller, for a wrapper that forwards
+    /// controller calls it does not interpret.
+    pub fn edit_controller(&self) -> &ComPtr<IEditController> {
+        &self.controller
     }
 
     /// Whether the controller is a separate object from the processor, joined
