@@ -74,14 +74,22 @@ pub enum Event {
     },
     /// A transport button.
     Transport(TransportAction),
-    /// A browser control, such as `browser_navigate_sound` or
-    /// `browser_load_next_sound`.
+    /// The preset up/down buttons: `+1` for next, `-1` for previous.
+    ///
+    /// Taken from the action name. Both `browser_load_next_sound` and
+    /// `browser_load_previous_sound` carry a payload of `-1`, so the payload
+    /// says nothing about direction.
+    PresetStep(i8),
+    /// A browser control, such as `browser_navigate_sound`.
     Browser {
         /// The action symbol.
         action: String,
         /// Its payload: a step for encoders, `nil` for buttons.
         value: Value,
     },
+    /// The page buttons moved to another knob page. The device turns the
+    /// page itself and reports where it went, counting from 0.
+    ParameterPage(u32),
     /// The device changed page.
     Page {
         /// Page symbol, e.g. `parameter`, `browser`.
@@ -218,6 +226,23 @@ fn decode_action(action: &str, payload: &Value) -> Event {
                 _ => unknown(action, payload),
             }
         }
+        // plugin_parameter_set_page_index {nks1_view_address: n}
+        "plugin_parameter_set_page_index" => {
+            let index = match payload {
+                Value::Map(m) => m
+                    .iter()
+                    .find(|(k, _)| k.as_str() == Some("nks1_view_address"))
+                    .and_then(|(_, v)| v.as_u64())
+                    .and_then(|v| u32::try_from(v).ok()),
+                _ => None,
+            };
+            match index {
+                Some(i) => Event::ParameterPage(i),
+                None => unknown(action, payload),
+            }
+        }
+        "browser_load_next_sound" => Event::PresetStep(1),
+        "browser_load_previous_sound" => Event::PresetStep(-1),
         a if a.starts_with("browser_") => Event::Browser {
             action: a.to_owned(),
             value: payload.clone(),
@@ -324,6 +349,27 @@ mod tests {
                 vec![Event::Transport(want)]
             );
         }
+    }
+
+    #[test]
+    fn a_page_button_reports_the_page_it_moved_to() {
+        // Captured: {plugin_parameter_set_page_index: {nks1_view_address: 2}}
+        let r = Registry::default();
+        let n = action(
+            "plugin_parameter_set_page_index",
+            Value::Map(vec![(s("nks1_view_address"), Value::from(2u32))]),
+        );
+        assert_eq!(decode(&r, &n), vec![Event::ParameterPage(2)]);
+    }
+
+    #[test]
+    fn preset_buttons_step_by_name_not_by_payload() {
+        // Captured on hardware: both buttons send -1.
+        let r = Registry::default();
+        let next = action("browser_load_next_sound", Value::from(-1i64));
+        let prev = action("browser_load_previous_sound", Value::from(-1i64));
+        assert_eq!(decode(&r, &next), vec![Event::PresetStep(1)]);
+        assert_eq!(decode(&r, &prev), vec![Event::PresetStep(-1)]);
     }
 
     #[test]

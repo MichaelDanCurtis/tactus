@@ -620,7 +620,8 @@ The action is the map's key, by registry id. Observed:
 | Control | Action | Value |
 |---|---|---|
 | Browser page encoders | `browser_navigate_sound`, `browser_navigate_bank`, `browser_navigate_brand` | `±1` step |
-| Load next / previous sound | `browser_load_next_sound`, `browser_load_previous_sound` | `-1` in both cases; meaning not yet established |
+| Preset up / down | `browser_load_next_sound`, `browser_load_previous_sound` | `-1` in both cases. **Direction is the action name, not the value**; see below |
+| Knob page left / right | `plugin_parameter_set_page_index` | `{nks1_view_address: <page, from 0>}` |
 | Browser filter buttons | `browser_toggle_filter_user_presets`, `browser_toggle_filter_favorite_presets` | `nil` |
 
 The third argument was `true` in every case; meaning not established.
@@ -640,10 +641,8 @@ crate's decoder converted every integer through the registry and reported an
 encoder step of `1` as `pedal_expression_connected` — symbol #1. The decoder
 now resolves keys only.
 
-**Not yet observed:** transport buttons and knob turns. The knob hypothesis is
-that `plugin_parameter_value_change` only reports for parameters that exist,
-and the parameter page currently shows "no instrument loaded"; publishing a
-parameter page first should make knob turns report.
+Knob turns and transport presses were observed later, once a parameter page
+was published; see the sections below.
 
 ## Display: the parameter-page schema
 
@@ -941,3 +940,38 @@ The registry also defines `daw_restart`, `daw_count_in`, `daw_undo`,
 `daw_redo`, `daw_quantize`, `daw_quantize_half`, `daw_tap_tempo`,
 `daw_set_tempo`. None were observed yet, and some may need Shift on this
 keyboard.
+
+## CONFIRMED: an NKS preset on the keyboard
+
+**Evidence class: hardware observation, confirmed by the device's owner.**
+S88 MK3, agent `2.0.7 (R15)`, Komplete Kontrol closed. `examples/preset.rs`
+read Super 8 R2's *Circuits* with `tactus-nks` and sent all ten of its pages
+in one `client_parameter_page_set_data`:
+
+- The screen showed the plugin name, the preset's own section headers
+  (**Filter** over Cutoff, Reso, Env Amt, FM Osc 2; **Filter Env** over
+  Attack, Decay, Sustain, Release), and its knob labels.
+- Knob values tracked the hand.
+- **The page buttons work with no help from the host.** The device turns the
+  page itself, then reports where it went:
+  `plugin_action {plugin_parameter_set_page_index: {nks1_view_address: n}}`,
+  counting from 0. The host needs that only to know what is on screen. If it
+  re-sends the layout, the layout's own view address (with
+  `force_host_viewstate: true`) moves the device back to that page.
+- The agent logged no warnings for a ten-page layout with up to six sections
+  per page, repeated section names, and empty slots as `nil`.
+
+### Preset up / down
+
+The preset buttons send `browser_load_next_sound` and
+`browser_load_previous_sound`, **both with the value `-1`**. The first
+implementation used the value as the step, and every press of either button
+went backwards through the folder. On screen this looked correct, since each
+press changed the preset. The log showed `next` stepping down the alphabet.
+Direction is the action name. `events::decode` reports both as
+`Event::PresetStep(±1)` and ignores the payload.
+
+Loading the next preset is just a new layout sent with view address 0, so the
+new preset opens on its first page, as the owner observed. Stepping through
+dozens of presets in a few seconds produced no agent warnings.
+

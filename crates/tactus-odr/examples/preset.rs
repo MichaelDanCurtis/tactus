@@ -1,5 +1,6 @@
 //! Show an NKS preset on the MK3: its plugin name, every knob page with the
-//! preset's own section headers and labels, and knobs that turn.
+//! preset's own section headers and labels, and knobs that turn. The preset
+//! up/down buttons step through the other presets in the same folder.
 //!
 //! ```text
 //! TACTUS_ODR_REGISTRY=/path/to/symbol_registry.json \
@@ -7,10 +8,11 @@
 //! ```
 //!
 //! This shows a preset; it does not host the plugin. Knob values are kept
-//! here, starting at 50%, and are not the plugin's. Anything the device sends
-//! that is not a knob is printed, which is how the page buttons get mapped.
+//! here, starting at 50%, and are not the plugin's. The page buttons need no
+//! help: the device turns pages itself and reports where it went.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tactus_nks::Preset;
@@ -19,24 +21,20 @@ use tactus_odr::{
     Client, Control, HostState, Knob, KnobSection, OdrError, Record, Registry, Transport,
 };
 
-fn main() -> Result<(), OdrError> {
-    let mut args = std::env::args().skip(1);
-    let Some(path) = args.next() else {
-        eprintln!("usage: preset <preset.nksf> [seconds]");
-        return Ok(());
-    };
-    let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(120);
-    let preset = Preset::read(&path).map_err(|e| OdrError::Decode(e.to_string()))?;
-    let Ok(registry) = std::env::var("TACTUS_ODR_REGISTRY") else {
-        eprintln!("Set TACTUS_ODR_REGISTRY to the symbol registry JSON.");
-        return Ok(());
-    };
-    let text = std::fs::read_to_string(&registry).map_err(|source| OdrError::Io {
-        op: "read registry",
-        source,
-    })?;
+const SERIAL: &str = "99FE7169";
 
-    // What the screen calls the plugin: its own name, else the product.
+/// What the loop needs once a preset is on screen.
+struct Shown {
+    values: HashMap<u32, f64>,
+    headers: Vec<String>,
+}
+
+fn shown(v: f64) -> String {
+    format!("{:.0}%", v * 100.0)
+}
+
+/// Send a preset's layout and name to the device, on its first page.
+fn show(client: &mut Client, preset: &Preset) -> Result<Shown, OdrError> {
     let plugin = preset
         .plugin
         .name
@@ -44,25 +42,9 @@ fn main() -> Result<(), OdrError> {
         .or_else(|| preset.info.bankchain.first().cloned())
         .unwrap_or_else(|| "NKS".into());
     let pages: Vec<_> = preset.pages.iter().filter(|p| !p.is_empty()).collect();
-    println!(
-        "{} — {plugin}, {} pages, {} bytes of plugin state left untouched",
-        preset.info.name,
-        pages.len(),
-        preset.state_len
-    );
-
-    // Local values, one per parameter id, and the text shown for each.
-    let mut values: HashMap<u32, f64> = HashMap::new();
-    for slot in pages.iter().flat_map(|p| p.slots.iter().flatten()) {
-        values.insert(slot.id, 0.5);
-    }
-    let shown = |v: f64| format!("{:.0}%", v * 100.0);
-    let displays: HashMap<u32, String> = values.iter().map(|(&id, &v)| (id, shown(v))).collect();
-    let names: HashMap<u32, &str> = pages
-        .iter()
-        .flat_map(|p| p.slots.iter().flatten())
-        .map(|s| (s.id, s.name.as_str()))
-        .collect();
+    let slots = || pages.iter().flat_map(|p| p.slots.iter().flatten());
+    let values: HashMap<u32, f64> = slots().map(|s| (s.id, 0.5)).collect();
+    let display = shown(0.5);
 
     let layout: Vec<Vec<KnobSection<'_>>> = pages
         .iter()
@@ -79,7 +61,7 @@ fn main() -> Result<(), OdrError> {
                                 id: s.id,
                                 name: &s.name,
                                 value: 0.5,
-                                display: displays.get(&s.id).map_or("", String::as_str),
+                                display: &display,
                             })
                         })
                         .collect(),
@@ -87,18 +69,13 @@ fn main() -> Result<(), OdrError> {
                 .collect()
         })
         .collect();
+    let headers = layout
+        .iter()
+        .map(|page| page.iter().map(|s| s.name).collect::<Vec<_>>().join(" | "))
+        .collect();
 
-    let mut client =
-        Client::connect_with_registry(tactus_odr::DEFAULT_SOCKET, Registry::from_json(&text)?)?;
-    let serial = "99FE7169";
-    client.instance_hello("tactus-preset", "0.1.0")?;
-    println!("connect_device: {}", client.connect_device(serial)?);
-    client.request_focus(serial)?;
-    if let Some(page) = client.registry().id("parameter") {
-        client.set_page(serial, page)?;
-    }
     client.set_host_state(
-        serial,
+        SERIAL,
         &HostState {
             transport: Transport::Stopped,
             record: Record::Off,
@@ -115,16 +92,63 @@ fn main() -> Result<(), OdrError> {
             preset_name: &preset.info.name,
         },
     )?;
-    client.set_parameter_layout(serial, &plugin, &layout, 0)?;
+    client.set_parameter_layout(SERIAL, &plugin, &layout, 0)?;
     println!(
-        "layout sent, page 1 of {}. Turn knobs, press page buttons — {seconds}s.\n",
-        layout.len()
+        "\n{} — {plugin}, {} pages, {} bytes of plugin state left untouched",
+        preset.info.name,
+        layout.len(),
+        preset.state_len
     );
-    for (i, page) in layout.iter().enumerate() {
-        let heads: Vec<&str> = page.iter().map(|s| s.name).collect();
-        println!("  page {:>2}: {}", i + 1, heads.join(" | "));
+    Ok(Shown { values, headers })
+}
+
+/// The presets beside `path`, sorted by file name.
+fn siblings(path: &Path) -> Vec<PathBuf> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut all: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "nksf"))
+                .collect()
+        })
+        .unwrap_or_default();
+    all.sort();
+    all
+}
+
+fn main() -> Result<(), OdrError> {
+    let mut args = std::env::args().skip(1);
+    let Some(first) = args.next() else {
+        eprintln!("usage: preset <preset.nksf> [seconds]");
+        return Ok(());
+    };
+    let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(120);
+    let Ok(registry) = std::env::var("TACTUS_ODR_REGISTRY") else {
+        eprintln!("Set TACTUS_ODR_REGISTRY to the symbol registry JSON.");
+        return Ok(());
+    };
+    let text = std::fs::read_to_string(&registry).map_err(|source| OdrError::Io {
+        op: "read registry",
+        source,
+    })?;
+    let read = |p: &Path| Preset::read(p).map_err(|e| OdrError::Decode(e.to_string()));
+
+    let mut path = PathBuf::from(first);
+    let folder = siblings(&path);
+    let mut client =
+        Client::connect_with_registry(tactus_odr::DEFAULT_SOCKET, Registry::from_json(&text)?)?;
+    client.instance_hello("tactus-preset", "0.1.0")?;
+    println!("connect_device: {}", client.connect_device(SERIAL)?);
+    client.request_focus(SERIAL)?;
+    if let Some(page) = client.registry().id("parameter") {
+        client.set_page(SERIAL, page)?;
     }
-    println!();
+    let mut on_screen = show(&mut client, &read(&path)?)?;
+    println!(
+        "{} presets in this folder. Knobs, page buttons, preset up/down — {seconds}s.",
+        folder.len()
+    );
 
     let start = Instant::now();
     let mut last = Instant::now();
@@ -134,23 +158,45 @@ fn main() -> Result<(), OdrError> {
             for event in events::decode(client.registry(), &n) {
                 match event {
                     Event::KnobTurn { id, delta } => {
-                        if let Some(v) = values.get_mut(&id) {
+                        if let Some(v) = on_screen.values.get_mut(&id) {
                             *v = (*v + delta).clamp(0.0, 1.0);
-                            client.set_parameter_value(serial, id, *v, &shown(*v))?;
+                            client.set_parameter_value(SERIAL, id, *v, &shown(*v))?;
                         }
                     }
-                    Event::KnobTouch { id, touched } => println!(
-                        "{} {} {}",
+                    Event::KnobTouch { .. } => {}
+                    Event::ParameterPage(i) => println!(
+                        "{} page {}: {}",
                         stamp(start),
-                        if touched { "touch  " } else { "release" },
-                        names.get(&id).copied().unwrap_or("?")
+                        i + 1,
+                        on_screen
+                            .headers
+                            .get(i as usize)
+                            .map_or("?", String::as_str)
                     ),
+                    // Preset up/down: step through the folder, wrapping.
+                    Event::PresetStep(step) => {
+                        let Some(here) = folder.iter().position(|p| *p == path) else {
+                            continue;
+                        };
+                        let len = folder.len() as i64;
+                        let next = (here as i64 + i64::from(step)).rem_euclid(len.max(1)) as usize;
+                        if let Some(p) = folder.get(next) {
+                            print!("{} preset {step:+} →", stamp(start));
+                            match read(p) {
+                                Ok(preset) => {
+                                    path = p.clone();
+                                    on_screen = show(&mut client, &preset)?;
+                                }
+                                Err(e) => println!(" {}: {e}", p.display()),
+                            }
+                        }
+                    }
                     other => println!("{} {other:?}", stamp(start)),
                 }
             }
         }
         if last.elapsed() >= Duration::from_secs(1) {
-            client.request_focus(serial)?;
+            client.request_focus(SERIAL)?;
             last = Instant::now();
         }
     }
