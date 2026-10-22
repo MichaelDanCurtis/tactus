@@ -371,6 +371,34 @@ fn check_image(image: &[u8]) -> Result<ImageFormat, OdrError> {
     ImageFormat::sniff(image).ok_or_else(|| OdrError::Decode("not a PNG or WebP image".into()))
 }
 
+/// A colour, as the parameter page takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rgb {
+    /// Red.
+    pub r: u8,
+    /// Green.
+    pub g: u8,
+    /// Blue.
+    pub b: u8,
+}
+
+impl Rgb {
+    /// The blue every page used before colours were configurable.
+    pub const DEFAULT: Self = Self {
+        r: 40,
+        g: 110,
+        b: 230,
+    };
+
+    fn to_value(self) -> Value {
+        map(vec![
+            ("r", Value::from(self.r)),
+            ("g", Value::from(self.g)),
+            ("b", Value::from(self.b)),
+        ])
+    }
+}
+
 /// Everything one parameter-page publish carries.
 #[derive(Debug, Clone)]
 pub struct ParameterPage<'a> {
@@ -382,6 +410,10 @@ pub struct ParameterPage<'a> {
     pub show_page: usize,
     /// Header image, from [`Client::add_asset`]. `None` draws none.
     pub background: Option<AssetHandle>,
+    /// `plugin_color`. `None` sends `nil`, which the agent accepts.
+    pub plugin_color: Option<Rgb>,
+    /// `nks_control_color`. `None` sends `nil`.
+    pub control_color: Option<Rgb>,
 }
 
 /// A section header over a run of knob slots, as an NKS1 page shows it.
@@ -829,6 +861,8 @@ impl Client {
                 pages,
                 show_page,
                 background: None,
+                plugin_color: Some(Rgb::DEFAULT),
+                control_color: Some(Rgb::DEFAULT),
             },
         )
     }
@@ -1156,6 +1190,8 @@ fn parameter_page_body(page: &ParameterPage<'_>) -> Result<Value, OdrError> {
         pages,
         show_page,
         background,
+        plugin_color,
+        control_color,
     } = *page;
     if pages.len() > MAX_PAGES {
         return Err(OdrError::Decode(format!(
@@ -1241,15 +1277,6 @@ fn parameter_page_body(page: &ParameterPage<'_>) -> Result<Value, OdrError> {
         ("nks2_layout", Value::Nil),
     ]);
 
-    // Colours: {r, g, b}, confirmed to parse. A neutral blue for now.
-    let rgb = |r: u32, g: u32, b: u32| {
-        map(vec![
-            ("r", Value::from(r)),
-            ("g", Value::from(g)),
-            ("b", Value::from(b)),
-        ])
-    };
-
     // Which view the device shows. Decompiled
     // (convert_variant_with_symbol_registry<…nks1/nks2_view_address…>,
     // 0x1002e0b64): a one-entry map whose value, for NKS1, must be an integer
@@ -1273,8 +1300,14 @@ fn parameter_page_body(page: &ParameterPage<'_>) -> Result<Value, OdrError> {
                     background.map_or(Value::Nil, AssetHandle::to_value),
                 ),
                 ("parameters", parameters),
-                ("plugin_color", rgb(40, 110, 230)),
-                ("nks_control_color", rgb(40, 110, 230)),
+                (
+                    "plugin_color",
+                    plugin_color.map_or(Value::Nil, Rgb::to_value),
+                ),
+                (
+                    "nks_control_color",
+                    control_color.map_or(Value::Nil, Rgb::to_value),
+                ),
             ]),
         ),
         ("device_owned_viewstate", viewstate),
@@ -1319,6 +1352,8 @@ mod tests {
             pages,
             show_page,
             background,
+            plugin_color: Some(Rgb::DEFAULT),
+            control_color: Some(Rgb::DEFAULT),
         }
     }
 

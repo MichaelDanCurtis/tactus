@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use tactus_nks::{Preset, artwork};
 use tactus_odr::events::{self, Event};
 use tactus_odr::{
-    Client, Control, HostState, Knob, KnobSection, OdrError, ParameterPage, Record, Registry,
+    Client, Control, HostState, Knob, KnobSection, OdrError, ParameterPage, Record, Registry, Rgb,
     Transport,
 };
 
@@ -115,6 +115,8 @@ fn show(client: &mut Client, preset: &Preset) -> Result<Shown, OdrError> {
             pages: &layout,
             show_page: 0,
             background,
+            plugin_color: Some(Rgb::DEFAULT),
+            control_color: Some(Rgb::DEFAULT),
         },
     )?;
     println!(

@@ -1040,3 +1040,24 @@ fields: `name`, `background`, `parameters`, `plugin_color`,
 `nks_control_color`. The knob area is drawn by the device. The registry's
 other `image` symbol belongs to menu-parameter entries (`menu`, `index`,
 `num_values`, `image`). It is not a page background.
+
+### Page colours
+
+**Hardware observation, confirmed by the device's owner** (`examples/colors.rs`,
+one field changed per step, Super 8 R2 banner shown throughout):
+
+| Field | Effect on the parameter page |
+|---|---|
+| `plugin_color` | none visible; red and green looked the same as blue |
+| `nks_control_color` | colours the knobs' **value arcs** (red, green, white and black all showed as sent) |
+| both `nil` | arcs drawn white, the device's default |
+
+`plugin_color` parses but is presumably used on another page (plugin chain or
+browser). Untested there.
+
+NI ships the arc colour per product. `PAResources/_DatabaseResources/color/
+color.db` is a SQLite table `color(Location, Name, Value, seqidx)`. Rows named
+`NKS2_control_color` give a hex RGB per product, for example `Super 8 R2` →
+`FC6949`, `Massive X` → `FF4D00`, `FM8` → `EBE9EA`. The largest copy is under
+`Komplete Kontrol/PAResources` (2,142 rows). Its sibling rows `MST_bgcolor`
+and `VB_bgcolor` are browser tile backgrounds.
