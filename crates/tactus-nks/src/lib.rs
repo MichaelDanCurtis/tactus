@@ -3,7 +3,8 @@
 //! An NKS preset is what a host needs to put a plugin on a Kontrol keyboard
 //! without knowing anything about the plugin: its browser metadata, which
 //! plugin it belongs to, and the knob pages the hardware shows. This crate
-//! reads exactly those three things.
+//! reads exactly those three things, and writes them back
+//! ([`Preset::to_bytes`]).
 //!
 //! It deliberately does **not** interpret the plugin's own state. That chunk
 //! (`PCHK`) is an opaque blob: it is carried as bytes, to be handed back to the
@@ -105,6 +106,15 @@ pub struct Info {
     pub device_type: String,
     /// Preset uuid. Newer presets only.
     pub uuid: Option<String>,
+    /// Metadata this crate does not model (for example `__ni_internal`),
+    /// kept as each value's msgpack bytes so a rewrite preserves it. Opaque:
+    /// nothing reads inside.
+    pub extra: Vec<(String, Vec<u8>)>,
+    /// The `NISI` keys a file had, in its order. Files differ on whether an
+    /// empty list is written or left out; a rewrite follows this list. Empty
+    /// for metadata built in code, which writes optional keys only when
+    /// non-empty.
+    pub keys: Vec<String>,
 }
 
 /// Which plugin a preset belongs to, from `PLID`.
@@ -165,6 +175,10 @@ pub struct Section<'a> {
 pub struct Page {
     /// Slots in order. `None` is an unassigned knob.
     pub slots: Vec<Option<Slot>>,
+    /// `(autoname, vflag)` as read for each position, assigned or not.
+    /// Unassigned slots carry these flags too (some are `autoname: true`);
+    /// [`Preset::to_bytes`] writes them back. Empty for a page built in code.
+    pub flags: Vec<(bool, bool)>,
 }
 
 impl Page {
@@ -278,6 +292,176 @@ impl Preset {
     }
 }
 
+/// Encode one msgpack value into a chunk body: version word `1`, then the value.
+fn chunk_body(v: &Value) -> Vec<u8> {
+    let mut out = 1u32.to_le_bytes().to_vec();
+    // Writing to a Vec cannot fail.
+    let _ = rmpv::encode::write_value(&mut out, v);
+    out
+}
+
+fn s(t: &str) -> Value {
+    Value::String(t.into())
+}
+
+fn strs(v: &[String]) -> Value {
+    Value::Array(v.iter().map(|t| s(t)).collect())
+}
+
+impl Preset {
+    /// Serialise to an `.nksf` file's bytes.
+    ///
+    /// The layout matches every surveyed preset: chunks `NISI`, `NICA`,
+    /// `PLID`, `PCHK` in that order, each a `u32` version `1` and one msgpack
+    /// value (`PCHK`: the plugin state, untouched), odd-sized chunks padded,
+    /// map keys in the order the vendor's files use. Optional metadata is
+    /// written only when present; metadata this crate does not model is
+    /// written back from [`Info::extra`] untouched.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let i = &self.info;
+        let modelled = |k: &str| -> Option<Value> {
+            Some(match k {
+                "author" => s(&i.author),
+                "bankchain" => strs(&i.bankchain),
+                "characters" => strs(&i.characters),
+                "comment" => s(&i.comment),
+                "deviceType" => s(&i.device_type),
+                "modes" => strs(&i.modes),
+                "name" => s(&i.name),
+                "types" => Value::Array(i.types.iter().map(|t| strs(t)).collect()),
+                "uuid" => s(i.uuid.as_deref()?),
+                "vendor" => s(&i.vendor),
+                _ => return None,
+            })
+        };
+        let extra = |k: &str| -> Option<Value> {
+            let (_, bytes) = i.extra.iter().find(|(name, _)| name == k)?;
+            rmpv::decode::read_value(&mut bytes.as_slice()).ok()
+        };
+        // Start from the file's own keys (or the required ones for metadata
+        // built in code), add anything filled in since, and only re-sort if
+        // something was added: a file read and written unchanged keeps its
+        // exact key order and its empty-but-present lists.
+        let mut keys: Vec<&str> = if i.keys.is_empty() {
+            vec![
+                "author",
+                "bankchain",
+                "comment",
+                "deviceType",
+                "name",
+                "vendor",
+            ]
+        } else {
+            i.keys.iter().map(String::as_str).collect()
+        };
+        let before = keys.len();
+        let add = |k: &'static str, filled: bool, keys: &mut Vec<&str>| {
+            if filled && !keys.contains(&k) {
+                keys.push(k);
+            }
+        };
+        add("characters", !i.characters.is_empty(), &mut keys);
+        add("modes", !i.modes.is_empty(), &mut keys);
+        add("types", !i.types.is_empty(), &mut keys);
+        add("uuid", i.uuid.is_some(), &mut keys);
+        for (k, _) in &i.extra {
+            if !keys.contains(&k.as_str()) {
+                keys.push(k);
+            }
+        }
+        if keys.len() != before || i.keys.is_empty() {
+            keys.sort_unstable();
+        }
+        let nisi: Vec<(Value, Value)> = keys
+            .into_iter()
+            .filter_map(|k| Some((s(k), modelled(k).or_else(|| extra(k))?)))
+            .collect();
+
+        let slot = |sl: &Option<Slot>, (autoname, vflag): (bool, bool)| -> Value {
+            match sl {
+                Some(sl) => {
+                    let mut m = vec![
+                        (s("autoname"), Value::Boolean(sl.autoname)),
+                        (s("id"), Value::from(sl.id)),
+                        (s("name"), s(&sl.name)),
+                    ];
+                    if let Some(sec) = &sl.section {
+                        m.push((s("section"), s(sec)));
+                    }
+                    m.push((s("vflag"), Value::Boolean(sl.vflag)));
+                    Value::Map(m)
+                }
+                None => Value::Map(vec![
+                    (s("autoname"), Value::Boolean(autoname)),
+                    (s("vflag"), Value::Boolean(vflag)),
+                ]),
+            }
+        };
+        let nica = if self.pages.is_empty() {
+            Value::Map(Vec::new())
+        } else {
+            let pages = self
+                .pages
+                .iter()
+                .map(|p| {
+                    Value::Array(
+                        p.slots
+                            .iter()
+                            .enumerate()
+                            .map(|(i, sl)| slot(sl, p.flags.get(i).copied().unwrap_or_default()))
+                            .collect(),
+                    )
+                })
+                .collect();
+            Value::Map(vec![(s("ni8"), Value::Array(pages))])
+        };
+
+        let pl = &self.plugin;
+        let mut plid = vec![(s("VST.magic"), Value::from(pl.vst_magic))];
+        if let Some(uid) = pl.vst3_uid {
+            plid.push((
+                s("VST3.uid"),
+                Value::Array(uid.iter().map(|&w| Value::from(w)).collect()),
+            ));
+        }
+        if let Some(n) = &pl.name {
+            plid.push((s("pluginName"), s(n)));
+        }
+        if let Some(v) = &pl.vendor {
+            plid.push((s("pluginVendor"), s(v)));
+        }
+
+        let mut pchk = 1u32.to_le_bytes().to_vec();
+        pchk.extend_from_slice(&self.plugin_state);
+
+        let chunks: [(&[u8; 4], Vec<u8>); 4] = [
+            (b"NISI", chunk_body(&Value::Map(nisi))),
+            (b"NICA", chunk_body(&nica)),
+            (b"PLID", chunk_body(&Value::Map(plid))),
+            (b"PCHK", pchk),
+        ];
+        let mut inner = b"NIKS".to_vec();
+        for (id, body) in &chunks {
+            inner.extend_from_slice(*id);
+            inner.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            inner.extend_from_slice(body);
+            if body.len() % 2 == 1 {
+                inner.push(0);
+            }
+        }
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&(inner.len() as u32).to_le_bytes());
+        out.extend(inner);
+        out
+    }
+
+    /// Write an `.nksf` file.
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<(), NksError> {
+        std::fs::write(path, self.to_bytes())?;
+        Ok(())
+    }
+}
+
 fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
     let b: [u8; 4] = bytes.get(at..at.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_le_bytes(b))
@@ -343,8 +527,38 @@ fn parse_info(v: &Value) -> Result<Info, NksError> {
         characters: texts(field(m, "characters")),
         device_type: text(m, "deviceType").unwrap_or_default(),
         uuid: text(m, "uuid"),
+        keys: m
+            .iter()
+            .filter_map(|(k, _)| k.as_str().map(str::to_owned))
+            .collect(),
+        extra: m
+            .iter()
+            .filter_map(|(k, v)| {
+                let k = k.as_str()?;
+                if MODELLED.contains(&k) {
+                    return None;
+                }
+                let mut bytes = Vec::new();
+                rmpv::encode::write_value(&mut bytes, v).ok()?;
+                Some((k.to_owned(), bytes))
+            })
+            .collect(),
     })
 }
+
+/// The `NISI` keys [`Info`] models; any other key goes to [`Info::extra`].
+const MODELLED: [&str; 10] = [
+    "author",
+    "bankchain",
+    "characters",
+    "comment",
+    "deviceType",
+    "modes",
+    "name",
+    "types",
+    "uuid",
+    "vendor",
+];
 
 fn parse_plugin(v: &Value) -> Result<PluginId, NksError> {
     let m = as_map(v, "PLID")?;
@@ -388,6 +602,13 @@ fn parse_pages(v: &Value) -> Result<Vec<Page>, NksError> {
             let Value::Array(slots) = page else {
                 return Err(NksError::Shape(format!("page {p} is not a list")));
             };
+            let flags = slots
+                .iter()
+                .map(|s| match s {
+                    Value::Map(m) => (flag(m, "autoname"), flag(m, "vflag")),
+                    _ => (false, false),
+                })
+                .collect();
             let slots = slots
                 .iter()
                 .enumerate()
@@ -395,7 +616,7 @@ fn parse_pages(v: &Value) -> Result<Vec<Page>, NksError> {
                     parse_slot(s).map_err(|e| NksError::Shape(format!("page {p} slot {i}: {e}")))
                 })
                 .collect::<Result<_, _>>()?;
-            Ok(Page { slots })
+            Ok(Page { slots, flags })
         })
         .collect()
 }
@@ -528,6 +749,78 @@ mod tests {
     }
 
     #[test]
+    fn a_written_preset_reads_back_identically() {
+        let p = Preset::parse(&preset(vec![page()])).unwrap();
+        let again = Preset::parse(&p.to_bytes()).unwrap();
+        assert_eq!(again, p);
+        // And with VST3 ids, extra metadata and no pages.
+        let mut q = p.clone();
+        q.plugin = PluginId {
+            vst_magic: 0,
+            vst3_uid: Some([1, 2, 3, 4]),
+            name: Some("Synth".into()),
+            vendor: Some("Maker".into()),
+        };
+        q.info.characters = vec!["Warm".into()];
+        q.info.uuid = Some("abc".into());
+        q.pages.clear();
+        q.plugin_state = vec![9; 7];
+        q.state_len = 7;
+        let again = Preset::parse(&q.to_bytes()).unwrap();
+        // Fields added after reading are written; the rewrite is stable.
+        assert_eq!(again.info.characters, q.info.characters);
+        assert_eq!(again.info.uuid, q.info.uuid);
+        assert_eq!(again.plugin, q.plugin);
+        assert_eq!(again.pages, q.pages);
+        assert_eq!(again.plugin_state, q.plugin_state);
+        assert_eq!(again.to_bytes(), q.to_bytes());
+    }
+
+    #[test]
+    fn metadata_built_in_code_writes_only_what_is_filled_in() {
+        let p = Preset {
+            info: Info {
+                name: "Init".into(),
+                vendor: "Maker".into(),
+                device_type: "INST".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let back = Preset::parse(&p.to_bytes()).unwrap();
+        assert_eq!(
+            back.info.keys,
+            [
+                "author",
+                "bankchain",
+                "comment",
+                "deviceType",
+                "name",
+                "vendor"
+            ]
+        );
+        assert_eq!(back.info.name, "Init");
+    }
+
+    #[test]
+    fn written_files_are_valid_riff_with_padding() {
+        let p = Preset::parse(&preset(vec![page()])).unwrap();
+        let b = p.to_bytes();
+        assert_eq!(&b[..4], b"RIFF");
+        assert_eq!(u32_at(&b, 4).unwrap() as usize + 8, b.len());
+        assert_eq!(&b[8..12], b"NIKS");
+        // Every chunk starts on an even offset.
+        let mut off = 12;
+        while off + 8 <= b.len() {
+            assert_eq!(off % 2, 0);
+            let n = u32_at(&b, off + 4).unwrap() as usize;
+            assert_eq!(u32_at(&b, off + 8), Some(1), "version word");
+            off += 8 + n + (n & 1);
+        }
+        assert_eq!(off, b.len());
+    }
+
+    #[test]
     fn a_complete_preset_reads_back() {
         let p = Preset::parse(&preset(vec![page()])).unwrap();
         assert_eq!(p.info.name, "Circuits");
@@ -593,6 +886,7 @@ mod tests {
                     vflag: false,
                 }),
             ],
+            ..Default::default()
         };
         let sections = pg.sections();
         assert_eq!(sections.len(), 2);
@@ -602,7 +896,8 @@ mod tests {
         assert!(!pg.is_empty());
         assert!(
             Page {
-                slots: vec![None; 8]
+                slots: vec![None; 8],
+                ..Default::default()
             }
             .is_empty()
         );
