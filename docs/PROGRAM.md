@@ -315,6 +315,8 @@ before M1 ships.
 ## 9. Immediate next steps
 
 Small open items are parked in `LATER.md`.
+Everything learned about making a plugin work on the keyboard, for plugin
+and host authors, is collected in `nks-plugin-guide.md`.
 
 The first three are done: §5 is resolved, the decomposition held, and the C ABI
 has been present since the crate was scaffolded — which did its job, since
